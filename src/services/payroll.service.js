@@ -297,6 +297,18 @@ export class PayrollService {
       if (endMin <= startMin) endMin += 24 * 60;
       const shiftMinutes = Math.max(60, endMin - startMin);
 
+      // Assigned shifts for this employee (multi-shift or single shift fallback)
+      let assignedShifts = empShiftAssignmentsMap.get(employeeId) || [];
+      if (assignedShifts.length === 0) {
+        assignedShifts = [
+          {
+            schedule_id: schedule.id,
+            salary: monthlySalary,
+            schedule: schedule,
+          },
+        ];
+      }
+
       // Branch-specific & global holidays
       const holidayDates = new Set(
         allHolidays
