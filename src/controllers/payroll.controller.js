@@ -147,6 +147,8 @@ export class PayrollController {
       return res.status(200).json({
         success: true,
         payroll: formatted,
+        payrolls: formatted,
+        records: formatted,
       });
     } catch (err) {
       console.error('List payroll error:', err);

@@ -929,7 +929,10 @@ export class AttendanceController {
           department: emp.department,
           phone_number: emp.phone_number || null,
           branches: emp.branches,
+          branch_name: emp.branches?.[0]?.name || null,
+          branch_id: emp.branch_ids?.[0] || null,
           is_present: isPresent,
+          status: attStatus,
           attendance_status: attStatus,
           attendance_id: att?.id || null,
           clock_in_time: att?.clock_in_time || null,
@@ -945,7 +948,7 @@ export class AttendanceController {
         if (status === 'present') {
           roster = roster.filter((e) => e.is_present);
         } else {
-          roster = roster.filter((e) => e.attendance_status === status);
+          roster = roster.filter((e) => e.attendance_status === status || e.status === status);
         }
       }
 
@@ -953,6 +956,7 @@ export class AttendanceController {
         success: true,
         date: targetDate,
         summary: {
+          total: employees.length,
           total_employees: employees.length,
           present: presentCount,
           late: lateCount,
@@ -960,6 +964,7 @@ export class AttendanceController {
           absent: absentCount,
           not_marked: notMarkedCount,
         },
+        records: roster,
         employees: roster,
       });
     } catch (err) {
