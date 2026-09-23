@@ -280,6 +280,7 @@ export class BranchesController {
       return res.status(200).json({
         success: true,
         qr_base64: qrBase64,
+        qr_image: qrBase64,
         qr_type: qrType,
         branch_id: branch.id,
         branch_name: branch.name,
