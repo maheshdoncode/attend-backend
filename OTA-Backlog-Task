@@ -1,0 +1,89 @@
+Created 003_add_app_releases.sql
+Viewed schema.sql:165-198
+Edited schema.sql
+Created app_updates.controller.js
+Created app_updates.routes.js
+Viewed index.js:1-30
+Edited index.js
+Viewed API_DOCS.md:2160-2200
+Edited API_DOCS.md
+Created test_app_updates.js
+Ran command: `node /Users/dhruv/.gemini/antigravity-ide/brain/a47d96da-37ca-44f7-a1e9-dd84de54d63c/scratch/test_app_updates.js`
+Ran command: `lsof -i :8000`
+Ran command: `npm run dev`
+Ran command: `node /Users/dhruv/.gemini/antigravity-ide/brain/a47d96da-37ca-44f7-a1e9-dd84de54d63c/scratch/test_app_updates.js`
+Viewed task-1095.log:1-22
+Viewed auth.js:1-43
+Viewed advance_salary.routes.js:1-20
+Edited app_updates.routes.js
+Ran command: `node /Users/dhruv/.gemini/antigravity-ide/brain/a47d96da-37ca-44f7-a1e9-dd84de54d63c/scratch/test_app_updates.js`
+Used tool: manage_task
+Viewed AndroidManifest.xml:1-54
+Edited AndroidManifest.xml
+Created publish_release.js
+Created walkthrough.md
+Ran command: `rm -f /Users/dhruv/.gemini/antigravity-ide/brain/a47d96da-37ca-44f7-a1e9-dd84de54d63c/scratch/test_app_updates.js /Users/dhruv/.gemini/antigravity-ide/brain/a47d96da-37ca-44f7-a1e9-dd84de54d63c/scratch/test_advance_salary.js`
+
+The **In-App Over-The-Air (OTA) APK Update System** has been designed and implemented.
+
+---
+
+### What Was Built on the Backend:
+
+1. **Database Schema**:
+   - Created [`migrations/003_add_app_releases.sql`](file:///Users/dhruv/Desktop/BAPA%27S/Attendy-backend/migrations/003_add_app_releases.sql) & updated [`migrations/schema.sql`](file:///Users/dhruv/Desktop/BAPA%27S/Attendy-backend/migrations/schema.sql) with the `app_releases` table.
+   - Stores `version_code`, `version_name`, `apk_url`, `release_notes`, `is_force_update`, and active rollout status.
+
+2. **REST Endpoints**:
+   - `GET /api/hrm/app-updates/check?platform=android&version_code=<build_number>`: Checks if an active update exists.
+   - `POST /api/hrm/app-updates/publish`: Owner endpoint to publish a new APK release and set rollout.
+   - `GET /api/hrm/app-updates/releases`: Owner listing of all releases.
+   - `PUT /api/hrm/app-updates/releases/:id/rollout`: Owner endpoint to switch or rollback active releases.
+   - `DELETE /api/hrm/app-updates/releases/:id`: Owner endpoint to remove releases.
+
+3. **CLI Helper**:
+   - Created [`scripts/publish_release.js`](file:///Users/dhruv/Desktop/BAPA%27S/Attendy-backend/scripts/publish_release.js) to publish APK releases directly from terminal.
+
+4. **API Documentation**:
+   - Updated [`API_DOCS.md`](file:///Users/dhruv/Desktop/BAPA%27S/Attendy-backend/API_DOCS.md).
+
+---
+
+### How to Integrate with your Flutter Android App:
+
+1. **Add Permission to `android/app/src/main/AndroidManifest.xml`**:
+   ```xml
+   <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+   ```
+
+2. **Add `package_info_plus` to `pubspec.yaml`**:
+   ```yaml
+   dependencies:
+     package_info_plus: ^8.0.0
+   ```
+
+3. **In-App Download & Auto-Install Service**:
+   Use `Dio` to stream download progress and `open_filex` to trigger Android's native installer:
+   ```dart
+   // 1. Download APK to cache directory
+   await dio.download(apkUrl, savePath, onReceiveProgress: (received, total) {
+     final progress = received / total;
+     // Update UI progress bar
+   });
+
+   // 2. Trigger native Android Package Installer
+   await OpenFilex.open(savePath, type: 'application/vnd.android.package-archive');
+   ```
+
+> [!IMPORTANT]
+> **Action Required**: Run the SQL commands in [`migrations/003_add_app_releases.sql`](file:///Users/dhruv/Desktop/BAPA%27S/Attendy-backend/migrations/003_add_app_releases.sql) in your Supabase SQL Editor to enable the `app_releases` table.
+
+Viewed API_DOCS.md:1466-1495
+Viewed 003_add_app_releases.sql:1-24
+Edited bm_dashboard_screen.dart
+Edited bm_dashboard_screen.dart
+Edited bm_dashboard_screen.dart
+Edited bm_dashboard_screen.dart
+Edited bm_dashboard_screen.dart
+Edited bm_dashboard_screen.dart
+Edited bm_dashboard_screen.dart

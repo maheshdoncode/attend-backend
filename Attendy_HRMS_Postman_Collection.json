@@ -1,0 +1,1262 @@
+{
+  "info": {
+    "name": "Attendy HRMS REST API",
+    "description": "Complete Postman API Collection for Attendy HRMS Backend with Authentication, Employees, Branches, QR Geofencing, Attendance, Schedules, Holidays, Deduction Policies, Payroll, and Reports.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000/api/hrm",
+      "type": "string",
+      "description": "Base URL for Attendy HRMS API"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string",
+      "description": "JWT Bearer token from login"
+    },
+    {
+      "key": "cronSecret",
+      "value": "attendy_internal_cron_secret_2026",
+      "type": "string",
+      "description": "Secret for internal cron endpoints"
+    },
+    {
+      "key": "employeeId",
+      "value": "",
+      "type": "string",
+      "description": "Sample employee UUID"
+    },
+    {
+      "key": "branchId",
+      "value": "",
+      "type": "string",
+      "description": "Sample branch UUID"
+    },
+    {
+      "key": "scheduleId",
+      "value": "",
+      "type": "string",
+      "description": "Sample schedule UUID"
+    },
+    {
+      "key": "holidayId",
+      "value": "",
+      "type": "string",
+      "description": "Sample holiday UUID"
+    },
+    {
+      "key": "policyId",
+      "value": "",
+      "type": "string",
+      "description": "Sample policy UUID"
+    },
+    {
+      "key": "attendanceId",
+      "value": "",
+      "type": "string",
+      "description": "Sample attendance UUID"
+    },
+    {
+      "key": "payrollId",
+      "value": "",
+      "type": "string",
+      "description": "Sample payroll record UUID"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "01 - Authentication",
+      "item": [
+        {
+          "name": "Login (Store Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const json = pm.response.json();",
+                  "    if (json.token) {",
+                  "        pm.collectionVariables.set(\"token\", json.token);",
+                  "        console.log(\"Token saved to collection variables\");",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"owner@attendy.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Logs in a user and returns a 24-hour JWT token."
+          }
+        },
+        {
+          "name": "Get Me (Current Profile)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Returns profile of current authenticated user."
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Employees",
+      "item": [
+        {
+          "name": "Create Employee",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Alex Smith\",\n  \"email\": \"alex.smith@company.com\",\n  \"password\": \"Password@123\",\n  \"role\": \"employee\",\n  \"department\": \"Engineering\",\n  \"monthly_salary\": 50000,\n  \"joined_date\": \"2026-09-01\",\n  \"employee_code\": \"EMP-1001\",\n  \"branch_ids\": [\n    \"{{branchId}}\"\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/employees",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "employees"
+              ]
+            },
+            "description": "Creates a new employee or branch manager."
+          }
+        },
+        {
+          "name": "List Employees",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/employees?page=1&limit=20&search=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "employees"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "key": "branch_id",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "role",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Lists all employees with pagination and filters."
+          }
+        },
+        {
+          "name": "Get Employee by ID",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/employees/{{employeeId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "employees",
+                "{{employeeId}}"
+              ]
+            },
+            "description": "Fetches full employee details."
+          }
+        },
+        {
+          "name": "Update Employee",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Alex Smith Updated\",\n  \"department\": \"Senior Engineering\",\n  \"monthly_salary\": 60000\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/employees/{{employeeId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "employees",
+                "{{employeeId}}"
+              ]
+            },
+            "description": "Updates employee details."
+          }
+        },
+        {
+          "name": "Assign Schedule Override",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"schedule_id\": \"{{scheduleId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/employees/{{employeeId}}/schedule",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "employees",
+                "{{employeeId}}",
+                "schedule"
+              ]
+            },
+            "description": "Overrides default work schedule for an employee."
+          }
+        },
+        {
+          "name": "Remove Schedule Override",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/employees/{{employeeId}}/schedule",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "employees",
+                "{{employeeId}}",
+                "schedule"
+              ]
+            },
+            "description": "Removes schedule override, falling back to default."
+          }
+        },
+        {
+          "name": "Delete Employee (Soft Delete)",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/employees/{{employeeId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "employees",
+                "{{employeeId}}"
+              ]
+            },
+            "description": "Soft deletes employee by setting is_active = false."
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Branches & QR Codes",
+      "item": [
+        {
+          "name": "Create Branch",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Surat Central Hub\",\n  \"address\": \"Ring Road, Surat, Gujarat\",\n  \"latitude\": 21.1702,\n  \"longitude\": 72.8311,\n  \"radius_meters\": 100,\n  \"qr_type\": \"dynamic\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/branches",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "branches"
+              ]
+            },
+            "description": "Creates a new branch with coordinates and auto-generated secret."
+          }
+        },
+        {
+          "name": "List Branches",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/branches",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "branches"
+              ]
+            },
+            "description": "Lists all active branches."
+          }
+        },
+        {
+          "name": "Get Branch by ID",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/branches/{{branchId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "branches",
+                "{{branchId}}"
+              ]
+            },
+            "description": "Gets details of a branch."
+          }
+        },
+        {
+          "name": "Update Branch",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Surat Central Hub (Updated)\",\n  \"radius_meters\": 150\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/branches/{{branchId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "branches",
+                "{{branchId}}"
+              ]
+            },
+            "description": "Updates branch details."
+          }
+        },
+        {
+          "name": "Get Branch QR Code",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/branches/{{branchId}}/qr",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "branches",
+                "{{branchId}}",
+                "qr"
+              ]
+            },
+            "description": "Generates base64 QR code image and payload."
+          }
+        },
+        {
+          "name": "Regenerate Branch QR Secret",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/branches/{{branchId}}/qr/regenerate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "branches",
+                "{{branchId}}",
+                "qr",
+                "regenerate"
+              ]
+            },
+            "description": "Regenerates QR secret and outputs new QR code."
+          }
+        },
+        {
+          "name": "Delete Branch (Soft Delete)",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/branches/{{branchId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "branches",
+                "{{branchId}}"
+              ]
+            },
+            "description": "Deactivates a branch."
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Attendance & Check-in",
+      "item": [
+        {
+          "name": "Clock In (Scan QR + Geofence)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"qr_payload\": \"{\\\"type\\\":\\\"static\\\",\\\"secret\\\":\\\"your_qr_secret_here\\\",\\\"branch_id\\\":\\\"{{branchId}}\\\"}\",\n  \"latitude\": 21.1702,\n  \"longitude\": 72.8311\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/attendance/clock-in",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "attendance",
+                "clock-in"
+              ]
+            },
+            "description": "Employee clock in with QR code validation and GPS geofence."
+          }
+        },
+        {
+          "name": "Clock Out (Scan QR + Geofence)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"qr_payload\": \"{\\\"type\\\":\\\"static\\\",\\\"secret\\\":\\\"your_qr_secret_here\\\",\\\"branch_id\\\":\\\"{{branchId}}\\\"}\",\n  \"latitude\": 21.1702,\n  \"longitude\": 72.8311\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/attendance/clock-out",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "attendance",
+                "clock-out"
+              ]
+            },
+            "description": "Employee clock out to end shift."
+          }
+        },
+        {
+          "name": "Daily Attendance Status (All Employees & Status Filter)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/attendance/daily-status?date=2026-09-19&status=all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "attendance",
+                "daily-status"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2026-09-19",
+                  "description": "Target date YYYY-MM-DD (defaults to today)"
+                },
+                {
+                  "key": "status",
+                  "value": "all",
+                  "description": "Filter: all, present, absent, late, half_day, not_marked"
+                },
+                {
+                  "key": "branch_id",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Filter by branch UUID"
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Search name/email"
+                }
+              ]
+            },
+            "description": "Lists all active employees and shows whether each employee is present, late, half-day, absent, or not marked for today or any date."
+          }
+        },
+        {
+          "name": "List Attendance Records (Manager/Owner)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/attendance?page=1&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "attendance"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "month",
+                  "value": "9",
+                  "disabled": true
+                },
+                {
+                  "key": "year",
+                  "value": "2026",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "flagged",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List attendance records."
+          }
+        },
+        {
+          "name": "My Attendance (Employee View)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/attendance/my?month=9&year=2026",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "attendance",
+                "my"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "9"
+                },
+                {
+                  "key": "year",
+                  "value": "2026"
+                }
+              ]
+            },
+            "description": "Returns logged in employee attendance history."
+          }
+        },
+        {
+          "name": "Resolve Flagged Attendance",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clock_out_time\": \"2026-09-17T18:00:00.000Z\",\n  \"notes\": \"Supervisor verified clock out\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/attendance/{{attendanceId}}/resolve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "attendance",
+                "{{attendanceId}}",
+                "resolve"
+              ]
+            },
+            "description": "Resolves unclosed shift or flag."
+          }
+        },
+        {
+          "name": "Auto-Flag Unclosed Shifts (Cron Job)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-cron-secret",
+                "value": "{{cronSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/attendance/auto-flag",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "attendance",
+                "auto-flag"
+              ]
+            },
+            "description": "Internal cron endpoint to flag missing clock outs and mark absents."
+          }
+        },
+        {
+          "name": "Manual Attendance Punch (Owner/Manager)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employee_id\": \"{{employeeId}}\",\n  \"action\": \"clock_in\",\n  \"time\": \"2026-09-19T09:00:00.000Z\",\n  \"admin_notes\": \"Manual clock in by owner\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/attendance/manual",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "attendance",
+                "manual"
+              ]
+            },
+            "description": "Allows owner or branch manager to manually log a clock-in or clock-out punch for any employee."
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Work Schedules",
+      "item": [
+        {
+          "name": "Create Work Schedule",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"General Shift (9 to 6)\",\n  \"start_time\": \"09:00\",\n  \"end_time\": \"18:00\",\n  \"is_default\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/schedules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "schedules"
+              ]
+            },
+            "description": "Creates a work schedule."
+          }
+        },
+        {
+          "name": "List Work Schedules",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/schedules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "schedules"
+              ]
+            },
+            "description": "Lists all work schedules."
+          }
+        },
+        {
+          "name": "Update Work Schedule",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"General Shift (9:30 to 6:30)\",\n  \"start_time\": \"09:30\",\n  \"end_time\": \"18:30\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/schedules/{{scheduleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "schedules",
+                "{{scheduleId}}"
+              ]
+            },
+            "description": "Updates a work schedule."
+          }
+        },
+        {
+          "name": "Delete Work Schedule",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/schedules/{{scheduleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "schedules",
+                "{{scheduleId}}"
+              ]
+            },
+            "description": "Deletes a work schedule."
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Holidays",
+      "item": [
+        {
+          "name": "Create Holiday (Branch or Global)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-10-31\",\n  \"name\": \"Diwali\",\n  \"branch_id\": null\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/holidays",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "holidays"
+              ]
+            },
+            "description": "Adds a branch or global holiday."
+          }
+        },
+        {
+          "name": "List Holidays",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/holidays?month=10&year=2026",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "holidays"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "10"
+                },
+                {
+                  "key": "year",
+                  "value": "2026"
+                },
+                {
+                  "key": "branch_id",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Lists holidays."
+          }
+        },
+        {
+          "name": "Delete Holiday",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/holidays/{{holidayId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "holidays",
+                "{{holidayId}}"
+              ]
+            },
+            "description": "Removes a holiday."
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 - Deduction Policies",
+      "item": [
+        {
+          "name": "Create Deduction Policy",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Late Arrival\",\n  \"condition_type\": \"late_arrival\",\n  \"threshold_minutes\": 10,\n  \"deduction_type\": \"fixed_minutes\",\n  \"deduction_minutes\": 30\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/policies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "policies"
+              ]
+            },
+            "description": "Creates a deduction policy."
+          }
+        },
+        {
+          "name": "List Active Deduction Policies",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/policies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "policies"
+              ]
+            },
+            "description": "Lists all active policies."
+          }
+        },
+        {
+          "name": "Update Deduction Policy",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Late Arrival (Updated)\",\n  \"threshold_minutes\": 15,\n  \"deduction_minutes\": 45\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/policies/{{policyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "policies",
+                "{{policyId}}"
+              ]
+            },
+            "description": "Updates a deduction policy."
+          }
+        },
+        {
+          "name": "Delete Deduction Policy (Soft Delete)",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/policies/{{policyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "policies",
+                "{{policyId}}"
+              ]
+            },
+            "description": "Soft deletes a policy."
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 - Payroll",
+      "item": [
+        {
+          "name": "Live Payroll & Attendance Dashboard (Real-Time)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/payroll/live?month=9&year=2026",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payroll",
+                "live"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "9",
+                  "description": "Month 1-12 (defaults to current month)"
+                },
+                {
+                  "key": "year",
+                  "value": "2026",
+                  "description": "Year (defaults to current year)"
+                },
+                {
+                  "key": "employee_id",
+                  "value": "",
+                  "disabled": true,
+                  "description": "Target employee UUID (managers/owner only)"
+                }
+              ]
+            },
+            "description": "Returns live date-by-date attendance calendar, clock-in/out times, daily earnings, itemized daily deductions, earned-so-far total, and projected net salary."
+          }
+        },
+        {
+          "name": "Generate Monthly Payroll",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"month\": 9,\n  \"year\": 2026,\n  \"employee_ids\": []\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payroll/generate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payroll",
+                "generate"
+              ]
+            },
+            "description": "Computes monthly payroll with automatic deduction policies."
+          }
+        },
+        {
+          "name": "List Payroll Records",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/payroll?month=9&year=2026",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payroll"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "9"
+                },
+                {
+                  "key": "year",
+                  "value": "2026"
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Lists payroll records."
+          }
+        },
+        {
+          "name": "Get Employee Payslip Detail",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/payroll/{{employeeId}}/9/2026",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payroll",
+                "{{employeeId}}",
+                "9",
+                "2026"
+              ]
+            },
+            "description": "Full itemized payslip breakdown for employee."
+          }
+        },
+        {
+          "name": "Finalize Payroll Record",
+          "request": {
+            "method": "PUT",
+            "url": {
+              "raw": "{{baseUrl}}/payroll/{{payrollId}}/finalize",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payroll",
+                "{{payrollId}}",
+                "finalize"
+              ]
+            },
+            "description": "Finalizes a payroll record."
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 - Reports & File Exports",
+      "item": [
+        {
+          "name": "Attendance Monthly Report Matrix",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/reports/attendance?month=9&year=2026",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "attendance"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "9"
+                },
+                {
+                  "key": "year",
+                  "value": "2026"
+                },
+                {
+                  "key": "branch_id",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Attendance calendar matrix."
+          }
+        },
+        {
+          "name": "Payroll Summary Report",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/reports/payroll?month=9&year=2026",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "payroll"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "9"
+                },
+                {
+                  "key": "year",
+                  "value": "2026"
+                },
+                {
+                  "key": "branch_id",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Aggregated payroll totals and breakdown."
+          }
+        },
+        {
+          "name": "Export Attendance Report (.xlsx Excel)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/reports/export?type=attendance&format=excel&month=9&year=2026",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "attendance"
+                },
+                {
+                  "key": "format",
+                  "value": "excel"
+                },
+                {
+                  "key": "month",
+                  "value": "9"
+                },
+                {
+                  "key": "year",
+                  "value": "2026"
+                }
+              ]
+            },
+            "description": "Streams .xlsx spreadsheet file."
+          }
+        },
+        {
+          "name": "Export Payroll Report (.pdf PDF)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/reports/export?type=payroll&format=pdf&month=9&year=2026",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "payroll"
+                },
+                {
+                  "key": "format",
+                  "value": "pdf"
+                },
+                {
+                  "key": "month",
+                  "value": "9"
+                },
+                {
+                  "key": "year",
+                  "value": "2026"
+                }
+              ]
+            },
+            "description": "Streams .pdf document with formatted summary table."
+          }
+        }
+      ]
+    }
+  ]
+}
