@@ -115,19 +115,35 @@ export class ReportsController {
         });
       });
 
-      const result = employees.map((emp) => ({
-        id: emp.id,
-        name: emp.name,
-        employee_code: emp.employee_code,
-        department: emp.department,
-        days: attendanceMap.get(emp.id) || [],
-      }));
+      const result = employees.map((emp) => {
+        const dayList = attendanceMap.get(emp.id) || [];
+        const daysMap = {};
+        dayList.forEach((d) => {
+          const dayNum = parseInt(d.date.split('-')[2], 10);
+          const dayStr = d.date.split('-')[2];
+          daysMap[dayStr] = d;
+          daysMap[dayNum] = d;
+        });
+
+        return {
+          id: emp.id,
+          employee_id: emp.id,
+          name: emp.name,
+          employee_name: emp.name,
+          employee_code: emp.employee_code,
+          department: emp.department,
+          days: dayList,
+          days_map: daysMap,
+        };
+      });
 
       return res.status(200).json({
         success: true,
         month: monthNum,
         year: yearNum,
         employees: result,
+        matrix: result,
+        data: result,
       });
     } catch (err) {
       console.error('Attendance report error:', err);
@@ -195,6 +211,7 @@ export class ReportsController {
           id: r.id,
           employee_id: r.employee_id,
           name: user?.name || 'Unknown',
+          employee_name: user?.name || 'Unknown',
           employee_code: profile?.employee_code || '-',
           department: profile?.department || '-',
           branch_ids: branchIds,
@@ -237,7 +254,15 @@ export class ReportsController {
         total_gross: totalGross,
         total_deductions: totalDeductions,
         total_net: totalNet,
+        summary: {
+          total_employees: totalEmployees,
+          total_gross: totalGross,
+          total_deductions: totalDeductions,
+          total_net: totalNet,
+        },
         records: formatted,
+        items: formatted,
+        data: formatted,
       });
     } catch (err) {
       console.error('Payroll report error:', err);
