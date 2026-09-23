@@ -229,6 +229,7 @@ export class EmployeesController {
           email,
           role,
           is_active,
+          current_password,
           created_at,
           employee_profiles (
             employee_code,
