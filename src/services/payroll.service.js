@@ -78,21 +78,7 @@ export class PayrollService {
    * Only run when owner requests payslip generation.
    */
   static async generatePayroll(month, year, employeeIds = []) {
-    // 1. Fetch active deduction policies
-    const { data: policies } = await supabase
-      .from('deduction_policies')
-      .select('*')
-      .eq('is_active', true);
-
-    const latePolicies = (policies || [])
-      .filter((p) => p.condition_type === 'late_arrival')
-      .sort((a, b) => (Number(b.threshold_minutes) || 0) - (Number(a.threshold_minutes) || 0));
-
-    const earlyPolicies = (policies || [])
-      .filter((p) => p.condition_type === 'early_departure')
-      .sort((a, b) => (Number(b.threshold_minutes) || 0) - (Number(a.threshold_minutes) || 0));
-
-    // 2. Fetch target employees
+    // 1 & 2. Fetch active deduction policies and targeted employees concurrently
     let userQuery = supabase
       .from('users')
       .select(`
@@ -119,45 +105,87 @@ export class PayrollService {
       userQuery = userQuery.in('id', employeeIds);
     }
 
-    const { data: employees, error: empError } = await userQuery;
-    if (empError) {
-      throw { status: 500, code: 'DB_ERROR', message: empError.message };
+    const [policiesRes, empRes] = await Promise.all([
+      supabase.from('deduction_policies').select('*').eq('is_active', true),
+      userQuery,
+    ]);
+
+    if (empRes.error) {
+      throw { status: 500, code: 'DB_ERROR', message: empRes.error.message };
     }
+
+    const policies = policiesRes.data || [];
+    const employees = empRes.data || [];
 
     if (!employees || employees.length === 0) {
       return [];
     }
+
+    const latePolicies = (policies || [])
+      .filter((p) => p.condition_type === 'late_arrival')
+      .sort((a, b) => (Number(b.threshold_minutes) || 0) - (Number(a.threshold_minutes) || 0));
+
+    const earlyPolicies = (policies || [])
+      .filter((p) => p.condition_type === 'early_departure')
+      .sort((a, b) => (Number(b.threshold_minutes) || 0) - (Number(a.threshold_minutes) || 0));
 
     const allEmpIds = employees.map((e) => e.id);
     const daysInMonth = new Date(year, month, 0).getDate();
     const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
     const endDate = `${year}-${String(month).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
 
-    // 3. Batch fetch existing payroll records
-    const { data: existingPayrolls } = await supabase
-      .from('payroll')
-      .select('*')
-      .in('employee_id', allEmpIds)
-      .eq('month', month)
-      .eq('year', year);
-
-// 3. Existing payrolls fetched if needed
-
-    // 4. Batch fetch all working day overrides for the month (working Sundays)
-    let workingDaysOverrides = [];
-    try {
-      const { data: overrides } = await supabase
+    // 3. Concurrently fetch all auxiliary datasets in parallel
+    const [
+      existingPayrollsRes,
+      workingDaysOverridesRes,
+      allSchedulesRes,
+      scheduleOverridesRes,
+      shiftAssignmentsRes,
+      monthHolidaysRes,
+      advancesRes,
+      attendanceRes,
+    ] = await Promise.all([
+      supabase
+        .from('payroll')
+        .select('*')
+        .in('employee_id', allEmpIds)
+        .eq('month', month)
+        .eq('year', year),
+      supabase
         .from('working_days_overrides')
         .select('*')
         .gte('date', startDate)
-        .lte('date', endDate);
-      workingDaysOverrides = overrides || [];
-    } catch {
-      workingDaysOverrides = [];
-    }
+        .lte('date', endDate),
+      supabase.from('work_schedules').select('*'),
+      supabase
+        .from('employee_schedule_overrides')
+        .select('employee_id, schedule_id')
+        .in('employee_id', allEmpIds),
+      supabase
+        .from('employee_shift_assignments')
+        .select('employee_id, schedule_id, salary')
+        .in('employee_id', allEmpIds),
+      supabase
+        .from('holidays')
+        .select('date, name, branch_id')
+        .gte('date', startDate)
+        .lte('date', endDate),
+      supabase
+        .from('advance_salaries')
+        .select('*')
+        .in('employee_id', allEmpIds)
+        .or('status.eq.approved,status.eq.deducted'),
+      supabase
+        .from('attendance')
+        .select('*')
+        .in('employee_id', allEmpIds)
+        .gte('date', startDate)
+        .lte('date', endDate)
+        .limit(5000),
+    ]);
 
-    // 5. Batch fetch work schedules and employee schedule overrides
-    const { data: allSchedules } = await supabase.from('work_schedules').select('*');
+    const workingDaysOverrides = workingDaysOverridesRes.data || [];
+    const allSchedules = allSchedulesRes.data || [];
     const defaultSchedule =
       (allSchedules || []).find((s) => s.is_default) ||
       (allSchedules || [])[0] || {
@@ -168,21 +196,12 @@ export class PayrollService {
       };
     const scheduleMap = new Map((allSchedules || []).map((s) => [s.id, s]));
 
-    const { data: scheduleOverrides } = await supabase
-      .from('employee_schedule_overrides')
-      .select('employee_id, schedule_id')
-      .in('employee_id', allEmpIds);
-
+    const scheduleOverrides = scheduleOverridesRes.data || [];
     const empScheduleOverrideMap = new Map(
       (scheduleOverrides || []).map((o) => [o.employee_id, scheduleMap.get(o.schedule_id)])
     );
 
-    // Fetch shift assignments with salaries
-    const { data: shiftAssignments } = await supabase
-      .from('employee_shift_assignments')
-      .select('employee_id, schedule_id, salary')
-      .in('employee_id', allEmpIds);
-
+    const shiftAssignments = shiftAssignmentsRes.data || [];
     const empShiftAssignmentsMap = new Map();
     (shiftAssignments || []).forEach((sa) => {
       if (!empShiftAssignmentsMap.has(sa.employee_id)) {
@@ -198,33 +217,14 @@ export class PayrollService {
       }
     });
 
-    // 6. Batch fetch holidays for the month
-    const { data: monthHolidays } = await supabase
-      .from('holidays')
-      .select('date, name, branch_id')
-      .gte('date', startDate)
-      .lte('date', endDate);
+    const allHolidays = monthHolidaysRes.data || [];
 
-    const allHolidays = monthHolidays || [];
-
-    // 6b. Batch fetch approved advance salaries for all targeted employees
-    let approvedAdvances = [];
-    try {
-      const { data: advances, error: advErr } = await supabase
-        .from('advance_salaries')
-        .select('*')
-        .in('employee_id', allEmpIds)
-        .or('status.eq.approved,status.eq.deducted');
-
-      if (!advErr && advances) {
-        approvedAdvances = advances.filter(
-          (a) =>
-            (!a.target_month && !a.target_year) || (Number(a.target_month) === Number(month) && Number(a.target_year) === Number(year))
-        );
-      }
-    } catch (err) {
-      console.warn('Warning: Could not fetch advance salaries:', err.message);
-    }
+    const advances = advancesRes.data || [];
+    const approvedAdvances = (advances || []).filter(
+      (a) =>
+        (!a.target_month && !a.target_year) ||
+        (Number(a.target_month) === Number(month) && Number(a.target_year) === Number(year))
+    );
 
     const empAdvancesMap = new Map();
     approvedAdvances.forEach((adv) => {
@@ -234,26 +234,29 @@ export class PayrollService {
       empAdvancesMap.get(adv.employee_id).push(adv);
     });
 
-    // 7. Batch fetch attendance records for all employees using pagination (to handle Supabase 1000 row max limit)
-    let attendanceRecords = [];
-    let attOffset = 0;
-    const attPageSize = 1000;
-    while (true) {
-      const { data: pageData, error: attError } = await supabase
-        .from('attendance')
-        .select('*')
-        .in('employee_id', allEmpIds)
-        .gte('date', startDate)
-        .lte('date', endDate)
-        .range(attOffset, attOffset + attPageSize - 1);
+    let attendanceRecords = attendanceRes.data || [];
+    if (attendanceRes.error) {
+      throw { status: 500, code: 'DB_ERROR', message: attendanceRes.error.message };
+    }
 
-      if (attError) {
-        throw { status: 500, code: 'DB_ERROR', message: attError.message };
+    // If attendance exceeded 5000 records, fetch remaining pages
+    if (attendanceRecords.length >= 5000) {
+      let attOffset = 5000;
+      const attPageSize = 1000;
+      while (true) {
+        const { data: pageData, error: attError } = await supabase
+          .from('attendance')
+          .select('*')
+          .in('employee_id', allEmpIds)
+          .gte('date', startDate)
+          .lte('date', endDate)
+          .range(attOffset, attOffset + attPageSize - 1);
+
+        if (attError) break;
+        attendanceRecords = attendanceRecords.concat(pageData || []);
+        if (!pageData || pageData.length < attPageSize) break;
+        attOffset += attPageSize;
       }
-
-      attendanceRecords = attendanceRecords.concat(pageData || []);
-      if (!pageData || pageData.length < attPageSize) break;
-      attOffset += attPageSize;
     }
 
     const empAttendanceMap = new Map();
@@ -264,7 +267,6 @@ export class PayrollService {
         if (r.schedule_id) {
           empMap.set(`${r.date}_${r.schedule_id}`, r);
         }
-        // Also map by date (or if first/single session on that date)
         if (!empMap.has(r.date)) {
           empMap.set(r.date, r);
         }
@@ -354,49 +356,101 @@ export class PayrollService {
       const perDaySalary = monthlySalary / workingDays;
 
       const now = new Date();
+      const currentMonthStr = String(now.getUTCMonth() + 1);
+      const currentYearStr = String(now.getUTCFullYear());
       const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(now);
       const currentUtcMins = now.getUTCHours() * 60 + now.getUTCMinutes();
       const currentIstMins = (currentUtcMins + 330) % 1440;
 
+      // Determine date cutoff: if current month & year, only evaluate up to todayStr
+      // If past month, evaluate all month days. If future month, cutoff is before month start.
+      const isCurrentMonth = Number(month) === (now.getMonth() + 1) && Number(year) === now.getFullYear();
+      const isFutureMonth = Number(year) > now.getFullYear() || (Number(year) === now.getFullYear() && Number(month) > (now.getMonth() + 1));
+
       let presentDays = 0;
       let absentDays = 0;
       let lateCount = 0;
+      let totalLateMinutes = 0;
       let halfDayCount = 0;
       let totalDeductions = 0;
       let totalEarnedSalary = 0;
-      let totalLatePenalties = 0;
+      let totalMonthNetFromDays = 0;
       const deductionBreakdown = [];
+      const dailyRecords = [];
       const shiftWeight = 1 / assignedShifts.length;
 
-      for (const dateStr of employeeWorkingDates) {
-        // Paid holiday: no deduction, earn full day
-        if (holidayDates.has(dateStr)) {
-          for (const shiftItem of assignedShifts) {
-            const shiftSalary = shiftItem.salary;
-            const shiftDailyRate = workingDays > 0 ? shiftSalary / workingDays : 0;
-            totalEarnedSalary += shiftDailyRate;
-          }
-          presentDays += 1;
+      // Sort dates chronologically
+      const sortedWorkingDates = Array.from(employeeWorkingDates).sort();
+
+      for (const dateStr of sortedWorkingDates) {
+        // If future month, do not process any days
+        if (isFutureMonth) {
           continue;
         }
 
-        // Do not penalize future dates in the ongoing current month
-        if (dateStr > todayStr) {
+        // In current month, do not evaluate future dates beyond today
+        if (isCurrentMonth && dateStr > todayStr) {
           continue;
         }
 
-        const isToday = dateStr === todayStr;
+        const isToday = isCurrentMonth && dateStr === todayStr;
+        const isHolidayDate = holidayDates.has(dateStr);
+        const holidayObj = allHolidays.find((h) => h.date === dateStr);
+
+        let dayBasePay = 0;
+        let dayDeductions = 0;
+        let dayNetPay = 0;
+        const dayShifts = [];
 
         for (const shiftItem of assignedShifts) {
           const shiftSchedule = shiftItem.schedule;
           const shiftSalary = shiftItem.salary;
-          const shiftDailyRate = workingDays > 0 ? shiftSalary / workingDays : 0;
-          const shiftMinutes = Math.max(
-            1,
-            parseTimeToMinutes(shiftSchedule.end_time) - parseTimeToMinutes(shiftSchedule.start_time)
-          );
+          const shiftDailyRate = workingDays > 0 ? Number((shiftSalary / workingDays).toFixed(2)) : 0;
+          let grossShiftMinutes = parseTimeToMinutes(shiftSchedule.end_time) - parseTimeToMinutes(shiftSchedule.start_time);
+          if (grossShiftMinutes <= 0) grossShiftMinutes += 1440;
 
-          // Correct shift-specific attendance lookup to avoid cross-shift contamination
+          let breakMinutes = 0;
+          if (shiftSchedule.has_break && shiftSchedule.break_start_time && shiftSchedule.break_end_time) {
+            let bStart = parseTimeToMinutes(shiftSchedule.break_start_time);
+            let bEnd = parseTimeToMinutes(shiftSchedule.break_end_time);
+            if (bEnd <= bStart) bEnd += 1440;
+            breakMinutes = Math.max(0, bEnd - bStart);
+          }
+
+          // Effective working minutes (e.g. 9h shift - 1h break = 8h / 480 mins)
+          const shiftMinutes = Math.max(60, grossShiftMinutes - breakMinutes);
+
+          let shiftTimeStr = `${(shiftSchedule.start_time || '').slice(0, 5)} - ${(shiftSchedule.end_time || '').slice(0, 5)}`;
+          if (shiftSchedule.has_break && shiftSchedule.break_start_time && shiftSchedule.break_end_time) {
+            shiftTimeStr += ` · Break: ${(shiftSchedule.break_start_time || '').slice(0, 5)}-${(shiftSchedule.break_end_time || '').slice(0, 5)}`;
+          }
+
+          dayBasePay += shiftDailyRate;
+
+          // Paid Holiday case
+          if (isHolidayDate) {
+            dayShifts.push({
+              schedule_id: shiftSchedule.id,
+              shift_name: shiftSchedule.name || 'Shift',
+              shift_time: shiftTimeStr,
+              has_break: !!shiftSchedule.has_break,
+              break_time: shiftSchedule.has_break ? `${(shiftSchedule.break_start_time || '').slice(0, 5)} - ${(shiftSchedule.break_end_time || '').slice(0, 5)}` : null,
+              working_hours: Number((shiftMinutes / 60).toFixed(1)),
+              base_pay: shiftDailyRate,
+              status: 'holiday',
+              clock_in: null,
+              clock_out: null,
+              late_minutes: 0,
+              is_manual: false,
+              deductions: [],
+              shift_net_pay: shiftDailyRate,
+            });
+            dayNetPay += shiftDailyRate;
+            totalEarnedSalary += shiftDailyRate;
+            continue;
+          }
+
+          // Lookup attendance for this specific shift
           let record = attendanceMap.get(`${dateStr}_${shiftSchedule.id}`);
           if (!record && assignedShifts.length === 1) {
             record = attendanceMap.get(dateStr);
@@ -407,62 +461,95 @@ export class PayrollService {
             }
           }
 
-          // If it is today and no punch yet, check if shift has even started/ended
+          // If it is today and no punch yet, check if shift has ended
           if (isToday && !record) {
             const shiftStartMins = parseTimeToMinutes(shiftSchedule.start_time);
             let shiftEndMins = parseTimeToMinutes(shiftSchedule.end_time);
             if (shiftEndMins <= shiftStartMins) shiftEndMins += 1440;
 
-            // Shift hasn't ended yet today; do not penalize as absent prematurely
             if (currentIstMins < shiftEndMins) {
+              // Shift is ongoing or upcoming today; skip without penalty
               continue;
             }
           }
 
+          const shiftDeductionsList = [];
+          let shiftDeductionSum = 0;
+          let shiftNet = 0;
+
           if (!record || record.status === 'absent') {
             absentDays += shiftWeight;
-            const amount = Number(shiftDailyRate.toFixed(2));
-            if (amount > 0) {
-              totalDeductions += amount;
-              deductionBreakdown.push({
+            const absentAmount = shiftDailyRate;
+            if (absentAmount > 0) {
+              shiftDeductionSum += absentAmount;
+              totalDeductions += absentAmount;
+              const dItem = {
                 date: dateStr,
                 type: 'absent',
                 reason: assignedShifts.length > 1 ? `Absent (${shiftSchedule.name})` : 'Absent',
                 policy_name: assignedShifts.length > 1 ? `Full Day Absent (${shiftSchedule.name})` : 'Full Day Absent',
-                amount,
-              });
+                amount: absentAmount,
+              };
+              shiftDeductionsList.push(dItem);
+              deductionBreakdown.push(dItem);
             }
-          } else {
-            let shiftDeductionApplied = 0;
+            shiftNet = 0;
 
-            // 1. Half Day Deduction
+            dayShifts.push({
+              schedule_id: shiftSchedule.id,
+              shift_name: shiftSchedule.name || 'Shift',
+              shift_time: shiftTimeStr,
+              has_break: !!shiftSchedule.has_break,
+              break_time: shiftSchedule.has_break ? `${(shiftSchedule.break_start_time || '').slice(0, 5)} - ${(shiftSchedule.break_end_time || '').slice(0, 5)}` : null,
+              working_hours: Number((shiftMinutes / 60).toFixed(1)),
+              base_pay: shiftDailyRate,
+              status: 'absent',
+              clock_in: null,
+              clock_out: null,
+              late_minutes: 0,
+              is_manual: false,
+              deductions: shiftDeductionsList,
+              shift_net_pay: shiftNet,
+            });
+          } else {
+            // Present or Half Day
             const isHalfDayRecord = record.status === 'half_day';
+            let shiftEarned = shiftDailyRate;
+
             if (isHalfDayRecord) {
               halfDayCount++;
               presentDays += shiftWeight * 0.5;
               absentDays += shiftWeight * 0.5;
-              const halfDayAmount = Number((shiftDailyRate / 2).toFixed(2));
-              totalEarnedSalary += (shiftDailyRate / 2);
-              if (halfDayAmount > 0) {
-                totalDeductions += halfDayAmount;
-                shiftDeductionApplied += halfDayAmount;
-                deductionBreakdown.push({
+              const halfDayDeduction = Number((shiftDailyRate / 2).toFixed(2));
+              shiftEarned = shiftDailyRate / 2;
+              totalEarnedSalary += shiftEarned;
+
+              if (halfDayDeduction > 0) {
+                shiftDeductionSum += halfDayDeduction;
+                totalDeductions += halfDayDeduction;
+                const dItem = {
                   date: dateStr,
                   type: 'half_day',
                   reason: assignedShifts.length > 1 ? `Half Day (${shiftSchedule.name})` : 'Half Day',
                   policy_name: assignedShifts.length > 1 ? `Half Day (${shiftSchedule.name})` : 'Half Day',
-                  amount: halfDayAmount,
-                });
+                  amount: halfDayDeduction,
+                };
+                shiftDeductionsList.push(dItem);
+                deductionBreakdown.push(dItem);
               }
             } else {
               presentDays += shiftWeight;
               totalEarnedSalary += shiftDailyRate;
             }
 
-            // 2. Late Arrival Deduction (additive)
+            // Late Arrival Policy Check
             const lateMins = record.clock_in_time
               ? computeLateMinutes(record.clock_in_time, shiftSchedule.start_time)
               : 0;
+
+            if (lateMins > 0) {
+              totalLateMinutes += lateMins;
+            }
 
             const applicableLatePolicies = latePolicies
               .filter((p) => !p.schedule_id || (shiftSchedule.id && p.schedule_id === shiftSchedule.id))
@@ -483,23 +570,64 @@ export class PayrollService {
                   lateDeduction = shiftDailyRate / 2;
                 }
               } else if (matchedLatePolicy.deduction_type === 'full_day') {
-                lateDeduction = Math.max(0, shiftDailyRate - shiftDeductionApplied);
+                lateDeduction = Math.max(0, shiftDailyRate - shiftDeductionSum);
               }
 
               if (lateDeduction > 0) {
-                const amount = Number(lateDeduction.toFixed(2));
-                totalLatePenalties += lateDeduction;
-                totalDeductions += amount;
-                deductionBreakdown.push({
+                const lateAmount = Number(lateDeduction.toFixed(2));
+                shiftDeductionSum += lateAmount;
+                totalDeductions += lateAmount;
+                const dItem = {
                   date: dateStr,
                   type: 'late_arrival',
                   reason: assignedShifts.length > 1 ? `${lateMins} min late (${shiftSchedule.name})` : `${lateMins} min late`,
                   policy_name: matchedLatePolicy?.name || 'Late Arrival Policy',
-                  amount,
-                });
+                  amount: lateAmount,
+                };
+                shiftDeductionsList.push(dItem);
+                deductionBreakdown.push(dItem);
               }
             }
+
+            shiftNet = Math.max(0, Number((shiftDailyRate - shiftDeductionSum).toFixed(2)));
+
+            dayShifts.push({
+              schedule_id: shiftSchedule.id,
+              shift_name: shiftSchedule.name || 'Shift',
+              shift_time: shiftTimeStr,
+              has_break: !!shiftSchedule.has_break,
+              break_time: shiftSchedule.has_break ? `${(shiftSchedule.break_start_time || '').slice(0, 5)} - ${(shiftSchedule.break_end_time || '').slice(0, 5)}` : null,
+              working_hours: Number((shiftMinutes / 60).toFixed(1)),
+              base_pay: shiftDailyRate,
+              status: isHalfDayRecord ? 'half_day' : 'present',
+              clock_in: record.clock_in_time || null,
+              clock_out: record.clock_out_time || null,
+              late_minutes: lateMins,
+              is_manual: record.is_manual || false,
+              deductions: shiftDeductionsList,
+              shift_net_pay: shiftNet,
+            });
           }
+
+          dayDeductions += shiftDeductionSum;
+          dayNetPay += shiftNet;
+        }
+
+        if (isHolidayDate) {
+          presentDays += 1;
+        }
+
+        if (dayShifts.length > 0) {
+          dailyRecords.push({
+            date: dateStr,
+            is_holiday: isHolidayDate,
+            holiday_name: holidayObj?.name || null,
+            day_base_pay: Number(dayBasePay.toFixed(2)),
+            day_deductions: Number(dayDeductions.toFixed(2)),
+            day_net_pay: Number(dayNetPay.toFixed(2)),
+            shifts: dayShifts,
+          });
+          totalMonthNetFromDays += dayNetPay;
         }
       }
 
@@ -521,8 +649,10 @@ export class PayrollService {
       });
 
       const grossSalary = Number(monthlySalary.toFixed(2));
+      const earnedSalary = Number(totalEarnedSalary.toFixed(2));
       const totalDeductionsWithAdvance = Number((totalDeductions + advanceDeductionTotal).toFixed(2));
-      const netSalary = Math.max(0, Number((totalEarnedSalary - totalLatePenalties - advanceDeductionTotal).toFixed(2)));
+      // Net salary = sum of all daily net pays minus advance salary deductions
+      const netSalary = Math.max(0, Number((totalMonthNetFromDays - advanceDeductionTotal).toFixed(2)));
 
       payrollToUpsert.push({
         employee_id: employeeId,
@@ -532,11 +662,14 @@ export class PayrollService {
         present_days: Math.round(presentDays),
         absent_days: Math.round(absentDays),
         late_count: lateCount,
+        total_late_minutes: totalLateMinutes,
         half_day_count: halfDayCount,
         total_deduction_amount: totalDeductionsWithAdvance,
         advance_deduction: Number(advanceDeductionTotal.toFixed(2)),
         deduction_breakdown: deductionBreakdown,
+        daily_records: dailyRecords,
         gross_salary: grossSalary,
+        earned_salary: earnedSalary,
         net_salary: netSalary,
         status: 'draft',
         generated_at: new Date().toISOString(),
@@ -576,20 +709,18 @@ export class PayrollService {
 
       if (advanceUpdates.length > 0) {
         const nowIso = new Date().toISOString();
-        for (const update of advanceUpdates) {
-          try {
-            await supabase
+        await Promise.allSettled(
+          advanceUpdates.map((update) =>
+            supabase
               .from('advance_salaries')
               .update({
                 status: 'deducted',
                 payroll_id: update.payroll_id,
                 deducted_at: nowIso,
               })
-              .eq('id', update.id);
-          } catch (advUpdateErr) {
-            console.warn('Warning: Failed to update advance salary status to deducted:', advUpdateErr.message);
-          }
-        }
+              .eq('id', update.id)
+          )
+        );
       }
     }
 

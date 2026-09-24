@@ -7,7 +7,16 @@ export class SchedulesController {
    */
   static async create(req, res) {
     try {
-      const { name, start_time, end_time, is_default = false, early_clock_in_limit_minutes = 30 } = req.body;
+      const {
+        name,
+        start_time,
+        end_time,
+        is_default = false,
+        early_clock_in_limit_minutes = 30,
+        has_break = false,
+        break_start_time = null,
+        break_end_time = null,
+      } = req.body;
 
       if (!name || !start_time || !end_time) {
         return res.status(400).json({
@@ -35,6 +44,9 @@ export class SchedulesController {
           end_time,
           is_default: Boolean(is_default),
           early_clock_in_limit_minutes: Number(early_clock_in_limit_minutes) || 30,
+          has_break: Boolean(has_break),
+          break_start_time: has_break && break_start_time ? break_start_time : null,
+          break_end_time: has_break && break_end_time ? break_end_time : null,
         })
         .select()
         .single();
@@ -98,7 +110,16 @@ export class SchedulesController {
   static async update(req, res) {
     try {
       const { id } = req.params;
-      const { name, start_time, end_time, is_default, early_clock_in_limit_minutes } = req.body;
+      const {
+        name,
+        start_time,
+        end_time,
+        is_default,
+        early_clock_in_limit_minutes,
+        has_break,
+        break_start_time,
+        break_end_time,
+      } = req.body;
 
       if (is_default === true) {
         await supabase
@@ -113,6 +134,9 @@ export class SchedulesController {
       if (end_time !== undefined) updates.end_time = end_time;
       if (is_default !== undefined) updates.is_default = Boolean(is_default);
       if (early_clock_in_limit_minutes !== undefined) updates.early_clock_in_limit_minutes = Number(early_clock_in_limit_minutes) || 30;
+      if (has_break !== undefined) updates.has_break = Boolean(has_break);
+      if (break_start_time !== undefined) updates.break_start_time = updates.has_break ?? true ? break_start_time : null;
+      if (break_end_time !== undefined) updates.break_end_time = updates.has_break ?? true ? break_end_time : null;
 
       const { data: schedule, error } = await supabase
         .from('work_schedules')

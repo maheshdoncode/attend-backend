@@ -12,6 +12,7 @@ router.use(auth);
 router.use(branchScope);
 
 router.post('/', requireRole('owner', 'branch_manager'), EmployeesController.create);
+router.get('/search', requireRole('owner', 'branch_manager'), EmployeesController.search);
 router.get('/', requireRole('owner', 'branch_manager'), EmployeesController.list);
 router.get('/:id', requireRole('owner', 'branch_manager'), EmployeesController.getById);
 router.put('/:id', requireRole('owner', 'branch_manager'), EmployeesController.update);

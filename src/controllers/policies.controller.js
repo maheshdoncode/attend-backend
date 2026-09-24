@@ -116,6 +116,7 @@ export class PoliciesController {
         threshold_minutes,
         deduction_type,
         deduction_minutes,
+        schedule_id,
         is_active,
       } = req.body;
 

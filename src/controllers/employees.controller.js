@@ -210,6 +210,159 @@ export class EmployeesController {
   }
 
   /**
+   * GET /api/hrm/employees/search
+   * Lightweight search endpoint for autocompletes, selectors, and quick pickers.
+   * Query: ?q=&branch_id=&role=&is_active=true&limit=20
+   */
+  static async search(req, res) {
+    try {
+      const { q, query: queryParam, search, branch_id, role, is_active = 'true', limit = 20 } = req.query;
+      const term = (q || queryParam || search || '').trim();
+      const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+
+      let dbQuery = supabase
+        .from('users')
+        .select(`
+          id,
+          name,
+          email,
+          role,
+          is_active,
+          employee_profiles (
+            employee_code,
+            department,
+            monthly_salary,
+            phone_number
+          ),
+          branch_employee_assignments (
+            branch_id,
+            branches (
+              id,
+              name
+            )
+          ),
+          employee_shift_assignments (
+            id,
+            schedule_id,
+            salary,
+            work_schedules (
+              id,
+              name,
+              start_time,
+              end_time
+            )
+          )
+        `)
+        .neq('role', 'owner');
+
+      if (is_active !== 'all') {
+        dbQuery = dbQuery.eq('is_active', is_active === 'true' || is_active === true);
+      }
+
+      if (role) {
+        dbQuery = dbQuery.eq('role', role);
+      }
+
+      // If search term provided, find matching IDs across employee_profiles as well
+      if (term) {
+        const { data: matchedProfiles } = await supabase
+          .from('employee_profiles')
+          .select('user_id')
+          .or(`employee_code.ilike.%${term}%,department.ilike.%${term}%,phone_number.ilike.%${term}%`);
+
+        const matchedIds = (matchedProfiles || []).map((p) => p.user_id).filter(Boolean);
+        if (matchedIds.length > 0) {
+          dbQuery = dbQuery.or(`name.ilike.%${term}%,email.ilike.%${term}%,id.in.(${matchedIds.join(',')})`);
+        } else {
+          dbQuery = dbQuery.or(`name.ilike.%${term}%,email.ilike.%${term}%`);
+        }
+      }
+
+      // Handle Branch Manager Scoping
+      if (req.user.role === 'branch_manager') {
+        const scopedIds = req.scopedBranchIds || [];
+        if (scopedIds.length === 0) {
+          return res.status(200).json({
+            success: true,
+            count: 0,
+            employees: [],
+          });
+        }
+      }
+
+      const { data: users, error } = await dbQuery
+        .order('name', { ascending: true })
+        .limit(limitNum * 2);
+
+      if (error) {
+        return res.status(500).json({
+          success: false,
+          error: { code: 'DB_ERROR', message: error.message },
+        });
+      }
+
+      let formatted = (users || []).map((u) => {
+        const profile = Array.isArray(u.employee_profiles)
+          ? u.employee_profiles[0]
+          : u.employee_profiles;
+        const branches = (u.branch_employee_assignments || [])
+          .map((a) => a.branches)
+          .filter(Boolean);
+
+        const currentShift = (u.employee_shift_assignments || [])[0]?.work_schedules || null;
+
+        const empData = {
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          role: u.role,
+          is_active: u.is_active,
+          employee_code: profile?.employee_code || null,
+          department: profile?.department || null,
+          phone_number: profile?.phone_number || null,
+          branches,
+          schedule: currentShift,
+        };
+
+        if (req.user.role === 'owner' && profile?.monthly_salary) {
+          empData.monthly_salary = Number(profile.monthly_salary);
+        }
+
+        return empData;
+      });
+
+      // Filter by branch_id if passed
+      if (branch_id) {
+        formatted = formatted.filter((emp) =>
+          emp.branches.some((b) => b.id === branch_id)
+        );
+      }
+
+      // Scoped branch filter for branch managers
+      if (req.user.role === 'branch_manager') {
+        const scopedIds = new Set(req.scopedBranchIds || []);
+        formatted = formatted.filter((emp) =>
+          emp.branches.some((b) => scopedIds.has(b.id))
+        );
+      }
+
+      formatted = formatted.slice(0, limitNum);
+
+      return res.status(200).json({
+        success: true,
+        count: formatted.length,
+        employees: formatted,
+      });
+    } catch (err) {
+      console.error('Search employees error:', err);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: err.message },
+      });
+    }
+  }
+
+  /**
    * GET /api/hrm/employees
    * Query: ?branch_id=&role=&search=&page=1&limit=20
    */
@@ -260,7 +413,18 @@ export class EmployeesController {
       }
 
       if (search) {
-        query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`);
+        const searchTerm = search.trim();
+        const { data: matchedProfiles } = await supabase
+          .from('employee_profiles')
+          .select('user_id')
+          .or(`employee_code.ilike.%${searchTerm}%,department.ilike.%${searchTerm}%,phone_number.ilike.%${searchTerm}%`);
+
+        const matchedIds = (matchedProfiles || []).map((p) => p.user_id).filter(Boolean);
+        if (matchedIds.length > 0) {
+          query = query.or(`name.ilike.%${searchTerm}%,email.ilike.%${searchTerm}%,id.in.(${matchedIds.join(',')})`);
+        } else {
+          query = query.or(`name.ilike.%${searchTerm}%,email.ilike.%${searchTerm}%`);
+        }
       }
 
       // Handle Branch Manager Scoping

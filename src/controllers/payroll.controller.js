@@ -34,10 +34,17 @@ export class PayrollController {
       }
 
       const results = await PayrollService.generatePayroll(monthNum, yearNum, employee_ids);
+      const totalGross = results.reduce((acc, r) => acc + (Number(r.gross_salary) || 0), 0);
+      const totalNet = results.reduce((acc, r) => acc + (Number(r.net_salary) || 0), 0);
+      const totalEarned = results.reduce((acc, r) => acc + (Number(r.earned_salary) || 0), 0);
 
       return res.status(200).json({
         success: true,
         message: `Payroll processed for ${results.length} employee(s)`,
+        generated_count: results.length,
+        total_gross: totalGross,
+        total_net: totalNet,
+        total_earned: totalEarned,
         payroll: results,
       });
     } catch (err) {
@@ -69,10 +76,13 @@ export class PayrollController {
           present_days,
           absent_days,
           late_count,
+          total_late_minutes,
           half_day_count,
           total_deduction_amount,
+          advance_deduction,
           deduction_breakdown,
           gross_salary,
+          earned_salary,
           net_salary,
           status,
           generated_at,
@@ -128,8 +138,10 @@ export class PayrollController {
           present_days: r.present_days,
           absent_days: r.absent_days,
           late_count: r.late_count,
+          total_late_minutes: Number(r.total_late_minutes || 0),
           half_day_count: r.half_day_count,
           gross_salary: Number(r.gross_salary),
+          earned_salary: Number(r.earned_salary || 0),
           total_deduction_amount: Number(r.total_deduction_amount),
           advance_deduction: Number(r.advance_deduction || 0),
           deduction_breakdown: r.deduction_breakdown,
@@ -206,7 +218,10 @@ export class PayrollController {
       let deductionBreakdown = Array.isArray(record.deduction_breakdown) ? [...record.deduction_breakdown] : [];
       let advanceDeduction = Number(record.advance_deduction || 0);
       let totalDeductions = Number(record.total_deduction_amount || 0);
-      let grossSalary = Number(record.gross_salary || 0);
+      let earnedSalary = Number(record.earned_salary || 0);
+      // Use net_salary directly from DB — it is accurately computed by the payroll service
+      // as: earnedSalary - latePenalties - advanceDeductions
+      let netSalary = Number(record.net_salary || 0);
 
       try {
         const { data: pendingApprovedAdvances } = await supabase
@@ -243,12 +258,12 @@ export class PayrollController {
             }
           }
           totalDeductions += newAdvTotal;
+          // Deduct any newly found advances from net salary too
+          netSalary = Math.max(0, Number((netSalary - newAdvTotal).toFixed(2)));
         }
       } catch (advCheckErr) {
         console.warn('Could not check pending advances for detail:', advCheckErr.message);
       }
-
-      const netSalary = Number((grossSalary - totalDeductions).toFixed(2));
 
       const payload = {
         id: record.id,
@@ -262,10 +277,13 @@ export class PayrollController {
         present_days: record.present_days,
         absent_days: record.absent_days,
         late_count: record.late_count,
+        total_late_minutes: Number(record.total_late_minutes || 0),
         half_day_count: record.half_day_count,
+        earned_salary: earnedSalary,
         total_deduction_amount: totalDeductions,
         advance_deduction: advanceDeduction,
         deduction_breakdown: deductionBreakdown,
+        daily_records: record.daily_records || [],
         net_salary: netSalary,
         status: record.status,
         generated_at: record.generated_at,
