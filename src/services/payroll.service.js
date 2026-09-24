@@ -353,18 +353,31 @@ export class PayrollService {
       if (workingDays === 0) workingDays = 26;
       const perDaySalary = monthlySalary / workingDays;
 
+      const now = new Date();
+      const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(now);
+      const currentUtcMins = now.getUTCHours() * 60 + now.getUTCMinutes();
+      const currentIstMins = (currentUtcMins + 330) % 1440;
+
       let presentDays = 0;
       let absentDays = 0;
       let lateCount = 0;
       let halfDayCount = 0;
       let totalDeductions = 0;
       const deductionBreakdown = [];
+      const shiftWeight = 1 / assignedShifts.length;
 
       for (const dateStr of employeeWorkingDates) {
         // Paid holiday: no deduction
         if (holidayDates.has(dateStr)) {
           continue;
         }
+
+        // Do not penalize future dates in the ongoing current month
+        if (dateStr > todayStr) {
+          continue;
+        }
+
+        const isToday = dateStr === todayStr;
 
         for (const shiftItem of assignedShifts) {
           const shiftSchedule = shiftItem.schedule;
@@ -375,11 +388,31 @@ export class PayrollService {
             parseTimeToMinutes(shiftSchedule.end_time) - parseTimeToMinutes(shiftSchedule.start_time)
           );
 
-          // Find attendance for this shift on this date
-          const record = attendanceMap.get(`${dateStr}_${shiftSchedule.id}`) || attendanceMap.get(dateStr);
+          // Correct shift-specific attendance lookup to avoid cross-shift contamination
+          let record = attendanceMap.get(`${dateStr}_${shiftSchedule.id}`);
+          if (!record && assignedShifts.length === 1) {
+            record = attendanceMap.get(dateStr);
+          } else if (!record && attendanceMap.has(dateStr)) {
+            const fallback = attendanceMap.get(dateStr);
+            if (!fallback.schedule_id || fallback.schedule_id === shiftSchedule.id) {
+              record = fallback;
+            }
+          }
+
+          // If it is today and no punch yet, check if shift has even started/ended
+          if (isToday && !record) {
+            const shiftStartMins = parseTimeToMinutes(shiftSchedule.start_time);
+            let shiftEndMins = parseTimeToMinutes(shiftSchedule.end_time);
+            if (shiftEndMins <= shiftStartMins) shiftEndMins += 1440;
+
+            // Shift hasn't ended yet today; do not penalize as absent prematurely
+            if (currentIstMins < shiftEndMins) {
+              continue;
+            }
+          }
 
           if (!record || record.status === 'absent') {
-            absentDays++;
+            absentDays += shiftWeight;
             const amount = Number(shiftDailyRate.toFixed(2));
             if (amount > 0) {
               totalDeductions += amount;
@@ -392,13 +425,14 @@ export class PayrollService {
               });
             }
           } else {
-            presentDays++;
             let shiftDeductionApplied = 0;
 
             // 1. Half Day Deduction
             const isHalfDayRecord = record.status === 'half_day';
             if (isHalfDayRecord) {
               halfDayCount++;
+              presentDays += shiftWeight * 0.5;
+              absentDays += shiftWeight * 0.5;
               const halfDayAmount = Number((shiftDailyRate / 2).toFixed(2));
               if (halfDayAmount > 0) {
                 totalDeductions += halfDayAmount;
@@ -411,6 +445,8 @@ export class PayrollService {
                   amount: halfDayAmount,
                 });
               }
+            } else {
+              presentDays += shiftWeight;
             }
 
             // 2. Late Arrival Deduction (additive)
@@ -482,8 +518,8 @@ export class PayrollService {
         month,
         year,
         working_days: workingDays,
-        present_days: presentDays,
-        absent_days: absentDays,
+        present_days: Math.round(presentDays),
+        absent_days: Math.round(absentDays),
         late_count: lateCount,
         half_day_count: halfDayCount,
         total_deduction_amount: totalDeductionsWithAdvance,
