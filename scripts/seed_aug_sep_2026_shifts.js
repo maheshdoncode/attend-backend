@@ -162,41 +162,49 @@ async function seedAttendance() {
           // Late arrival (9% chance)
           status = 'late';
           if (isNight) {
-            // Night shift starts at 20:00
-            const lateMin = 20 + (seedVal % 25); // 20:20 - 20:44
-            clockInTime = `${dateStr}T20:${String(lateMin).padStart(2, '0')}:15.000Z`;
-            clockOutTime = `${dateStr}T23:08:45.000Z`;
+            // Night shift starts at 20:00 IST (14:30 UTC)
+            const lateMin = 15 + (seedVal % 20); // 15 - 34 mins late -> 20:15 - 20:34 IST (14:45 - 15:04 UTC)
+            const lateUtcMin = 30 + lateMin;
+            const utcHour = 14 + Math.floor(lateUtcMin / 60);
+            const utcMin = lateUtcMin % 60;
+            clockInTime = `${dateStr}T${String(utcHour).padStart(2, '0')}:${String(utcMin).padStart(2, '0')}:15.000Z`;
+            clockOutTime = `${dateStr}T17:38:45.000Z`; // 23:08 IST
             adminNotes = `Late check-in (${lateMin} mins)`;
           } else {
-            // Day shift starts at 09:00
-            const lateMin = 25 + (seedVal % 20); // 09:25 - 09:44
-            clockInTime = `${dateStr}T09:${String(lateMin).padStart(2, '0')}:22.000Z`;
-            clockOutTime = `${dateStr}T18:12:10.000Z`;
+            // Day shift starts at 09:00 IST (03:30 UTC)
+            const lateMin = 25 + (seedVal % 15); // 25 - 39 mins late -> 09:25 - 09:39 IST (03:55 - 04:09 UTC)
+            const lateUtcMin = 30 + lateMin;
+            const utcHour = 3 + Math.floor(lateUtcMin / 60);
+            const utcMin = lateUtcMin % 60;
+            clockInTime = `${dateStr}T${String(utcHour).padStart(2, '0')}:${String(utcMin).padStart(2, '0')}:22.000Z`;
+            clockOutTime = `${dateStr}T12:42:10.000Z`; // 18:12 IST
             adminNotes = `Late check-in (${lateMin} mins)`;
           }
         } else if (seedVal < 20) {
           // Half day (6% chance)
           status = 'half_day';
           if (isNight) {
-            clockInTime = `${dateStr}T20:00:00.000Z`;
-            clockOutTime = `${dateStr}T21:30:00.000Z`;
+            clockInTime = `${dateStr}T14:30:00.000Z`; // 20:00 IST
+            clockOutTime = `${dateStr}T16:00:00.000Z`; // 21:30 IST (1.5 hrs worked)
             adminNotes = 'Half shift completed';
           } else {
-            clockInTime = `${dateStr}T09:02:10.000Z`;
-            clockOutTime = `${dateStr}T13:30:00.000Z`;
+            clockInTime = `${dateStr}T03:32:10.000Z`; // 09:02 IST
+            clockOutTime = `${dateStr}T07:30:00.000Z`; // 13:00 IST (3.5 hrs worked)
             adminNotes = 'First half attended';
           }
         } else {
           // Present on time (80% chance)
           status = 'present';
-          const inJitter = seedVal % 5;
-          const outJitter = seedVal % 15;
+          const inJitter = seedVal % 4;
+          const outJitter = seedVal % 12;
           if (isNight) {
-            clockInTime = `${dateStr}T19:5${5 + (inJitter % 4)}:30.000Z`; // 19:55 - 19:58
-            clockOutTime = `${dateStr}T23:${String(outJitter).padStart(2, '0')}:15.000Z`; // 23:00 - 23:14
+            // 19:56 - 19:59 IST (14:26 - 14:29 UTC)
+            clockInTime = `${dateStr}T14:2${6 + (inJitter % 4)}:30.000Z`;
+            clockOutTime = `${dateStr}T17:${30 + outJitter}:15.000Z`; // 23:00 - 23:12 IST (17:30 - 17:42 UTC)
           } else {
-            clockInTime = `${dateStr}T08:5${6 + (inJitter % 3)}:40.000Z`; // 08:56 - 08:58
-            clockOutTime = `${dateStr}T18:${String(outJitter).padStart(2, '0')}:20.000Z`; // 18:00 - 18:14
+            // 08:56 - 08:59 IST (03:26 - 03:29 UTC)
+            clockInTime = `${dateStr}T03:2${6 + (inJitter % 4)}:40.000Z`;
+            clockOutTime = `${dateStr}T12:${30 + outJitter}:20.000Z`; // 18:00 - 18:12 IST (12:30 - 12:42 UTC)
           }
         }
 
