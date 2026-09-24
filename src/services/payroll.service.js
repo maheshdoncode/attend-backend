@@ -363,12 +363,20 @@ export class PayrollService {
       let lateCount = 0;
       let halfDayCount = 0;
       let totalDeductions = 0;
+      let totalEarnedSalary = 0;
+      let totalLatePenalties = 0;
       const deductionBreakdown = [];
       const shiftWeight = 1 / assignedShifts.length;
 
       for (const dateStr of employeeWorkingDates) {
-        // Paid holiday: no deduction
+        // Paid holiday: no deduction, earn full day
         if (holidayDates.has(dateStr)) {
+          for (const shiftItem of assignedShifts) {
+            const shiftSalary = shiftItem.salary;
+            const shiftDailyRate = workingDays > 0 ? shiftSalary / workingDays : 0;
+            totalEarnedSalary += shiftDailyRate;
+          }
+          presentDays += 1;
           continue;
         }
 
@@ -434,6 +442,7 @@ export class PayrollService {
               presentDays += shiftWeight * 0.5;
               absentDays += shiftWeight * 0.5;
               const halfDayAmount = Number((shiftDailyRate / 2).toFixed(2));
+              totalEarnedSalary += (shiftDailyRate / 2);
               if (halfDayAmount > 0) {
                 totalDeductions += halfDayAmount;
                 shiftDeductionApplied += halfDayAmount;
@@ -447,6 +456,7 @@ export class PayrollService {
               }
             } else {
               presentDays += shiftWeight;
+              totalEarnedSalary += shiftDailyRate;
             }
 
             // 2. Late Arrival Deduction (additive)
@@ -478,6 +488,7 @@ export class PayrollService {
 
               if (lateDeduction > 0) {
                 const amount = Number(lateDeduction.toFixed(2));
+                totalLatePenalties += lateDeduction;
                 totalDeductions += amount;
                 deductionBreakdown.push({
                   date: dateStr,
@@ -511,7 +522,7 @@ export class PayrollService {
 
       const grossSalary = Number(monthlySalary.toFixed(2));
       const totalDeductionsWithAdvance = Number((totalDeductions + advanceDeductionTotal).toFixed(2));
-      const netSalary = Number((grossSalary - totalDeductionsWithAdvance).toFixed(2));
+      const netSalary = Math.max(0, Number((totalEarnedSalary - totalLatePenalties - advanceDeductionTotal).toFixed(2)));
 
       payrollToUpsert.push({
         employee_id: employeeId,
