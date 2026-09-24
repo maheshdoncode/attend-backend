@@ -461,7 +461,14 @@ export class AttendanceService {
         throw { status: 409, code: 'ALREADY_CLOCKED_IN', message: 'Employee is already clocked in today' };
       }
 
-      const schedule = await getEmployeeSchedule(employee_id);
+      let schedule = null;
+      if (schedule_id) {
+        const { data: sch } = await supabase.from('work_schedules').select('*').eq('id', schedule_id).maybeSingle();
+        if (sch) schedule = sch;
+      }
+      if (!schedule) {
+        schedule = await getEmployeeSchedule(employee_id);
+      }
       const lateMinutes = computeLateMinutes(now, schedule.start_time);
       const { data: latePolicy } = await supabase
         .from('deduction_policies')
