@@ -137,6 +137,13 @@ CREATE TABLE IF NOT EXISTS payroll (
   gross_salary NUMERIC(12,2),
   net_salary NUMERIC(12,2),
   status TEXT CHECK (status IN ('draft','finalized')) DEFAULT 'draft',
+  finalized_at TIMESTAMPTZ,
+  is_visible_to_employee BOOLEAN DEFAULT false,
+  visibility_mode TEXT CHECK (visibility_mode IN ('hours', 'once', 'always', 'hidden')) DEFAULT 'hours',
+  visibility_hours NUMERIC(6,2) DEFAULT 24,
+  view_count INTEGER DEFAULT 0,
+  first_viewed_at TIMESTAMPTZ,
+  last_viewed_at TIMESTAMPTZ,
   generated_at TIMESTAMPTZ DEFAULT now(),
   UNIQUE(employee_id, month, year)
 );
@@ -198,6 +205,14 @@ CREATE INDEX IF NOT EXISTS idx_advance_salaries_month_year ON advance_salaries(t
 CREATE INDEX IF NOT EXISTS idx_app_releases_platform_active ON app_releases(platform, is_active);
 CREATE INDEX IF NOT EXISTS idx_app_releases_version_code ON app_releases(platform, version_code DESC);
 
+-- 15. Organization Settings Table
+CREATE TABLE IF NOT EXISTS organization_settings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  key TEXT UNIQUE NOT NULL,
+  value JSONB NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- Seed Initial Deduction Policies if not already present
 INSERT INTO deduction_policies (name, condition_type, threshold_minutes, deduction_type, deduction_minutes, is_active)
 SELECT 'Late Arrival', 'late_arrival', 10, 'fixed_minutes', 30, true
@@ -215,3 +230,9 @@ WHERE NOT EXISTS (SELECT 1 FROM deduction_policies WHERE condition_type = 'half_
 INSERT INTO work_schedules (name, start_time, end_time, is_default)
 SELECT 'General Shift', '09:00:00', '18:00:00', true
 WHERE NOT EXISTS (SELECT 1 FROM work_schedules WHERE is_default = true);
+
+-- Seed Default Organization Settings
+INSERT INTO organization_settings (key, value)
+VALUES ('payroll_visibility', '{"mode": "hours", "hours": 24}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+

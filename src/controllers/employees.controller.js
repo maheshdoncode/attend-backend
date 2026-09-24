@@ -4,6 +4,57 @@ import { encryptCredential, decryptCredential } from '../utils/crypto.js';
 
 export class EmployeesController {
   /**
+   * Helper: Generate next sequential employee code (e.g. EMP001, EMP002, ...)
+   */
+  static async generateNextEmployeeCode() {
+    try {
+      const { data, error } = await supabase
+        .from('employee_profiles')
+        .select('employee_code');
+
+      if (error || !data || data.length === 0) {
+        return 'EMP001';
+      }
+
+      let maxNum = 0;
+      for (const row of data) {
+        if (!row.employee_code) continue;
+        const match = String(row.employee_code).match(/\d+/);
+        if (match) {
+          const num = parseInt(match[0], 10);
+          if (!isNaN(num) && num > maxNum) {
+            maxNum = num;
+          }
+        }
+      }
+
+      const nextNum = maxNum + 1;
+      return `EMP${String(nextNum).padStart(3, '0')}`;
+    } catch (err) {
+      console.error('Error generating next employee code:', err);
+      return 'EMP001';
+    }
+  }
+
+  /**
+   * GET /api/hrm/employees/next-code
+   */
+  static async getNextCode(req, res) {
+    try {
+      const next_code = await EmployeesController.generateNextEmployeeCode();
+      return res.status(200).json({
+        success: true,
+        next_code,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: error.message },
+      });
+    }
+  }
+
+  /**
    * POST /api/hrm/employees
    * Accessible by: owner, branch_manager
    */
@@ -128,15 +179,20 @@ export class EmployeesController {
       }
 
       const userId = newUser.id;
-
       const salaryValue = req.user.role === 'owner' ? (Number(monthly_salary) || 0) : 0;
+
+      // Auto-generate employee code if omitted or blank
+      let finalEmployeeCode = employee_code && String(employee_code).trim() ? String(employee_code).trim() : null;
+      if (!finalEmployeeCode) {
+        finalEmployeeCode = await EmployeesController.generateNextEmployeeCode();
+      }
 
       // 2. Insert Employee Profile
       const { data: profile, error: profileError } = await supabase
         .from('employee_profiles')
         .insert({
           user_id: userId,
-          employee_code: employee_code || null,
+          employee_code: finalEmployeeCode,
           department: department || null,
           monthly_salary: salaryValue,
           joined_date: joined_date || null,

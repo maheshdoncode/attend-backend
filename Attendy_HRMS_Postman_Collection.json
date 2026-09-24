@@ -216,6 +216,52 @@
           }
         },
         {
+          "name": "Get Next Sequential Employee Code",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/employees/next-code",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "employees",
+                "next-code"
+              ]
+            },
+            "description": "Calculates and returns the next sequential available employee code (e.g. EMP001, EMP002)."
+          }
+        },
+        {
+          "name": "Search Employees (Debounced / Fast)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/employees/search?q=alex&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "employees",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "alex",
+                  "description": "Search keyword (name, email, or code)"
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return"
+                }
+              ]
+            },
+            "description": "Fast lightweight employee lookup for autocomplete and search dropdowns."
+          }
+        },
+        {
           "name": "Get Employee by ID",
           "request": {
             "method": "GET",
@@ -1114,7 +1160,108 @@
                 "finalize"
               ]
             },
-            "description": "Finalizes a payroll record."
+            "description": "Finalizes a payroll record and starts the 24-hour viewing window for the employee."
+          }
+        },
+        {
+          "name": "Update Payroll Employee Visibility",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"visibility_mode\": \"hours\",\n  \"visibility_hours\": 24,\n  \"is_visible\": false,\n  \"reset_view\": false,\n  \"reset_timer\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payroll/{{payrollId}}/visibility",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payroll",
+                "{{payrollId}}",
+                "visibility"
+              ]
+            },
+            "description": "Configures visibility mode ('hours', 'once', 'always', 'hidden'), custom duration, resets view count, or restarts timer."
+          }
+        },
+        {
+          "name": "Bulk Update Payroll Visibility",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payroll_ids\": [\"{{payrollId}}\"],\n  \"visibility_mode\": \"hours\",\n  \"visibility_hours\": 24,\n  \"reset_view\": false,\n  \"reset_timer\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payroll/bulk-visibility",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payroll",
+                "bulk-visibility"
+              ]
+            },
+            "description": "Updates visibility mode, duration, or resets for multiple payroll records in bulk."
+          }
+        },
+        {
+          "name": "Get Global Payroll Visibility Settings",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/payroll/settings/visibility",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payroll",
+                "settings",
+                "visibility"
+              ]
+            },
+            "description": "Retrieves the company-wide default payroll visibility policy."
+          }
+        },
+        {
+          "name": "Update Global Payroll Visibility Settings",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"visibility_mode\": \"hours\",\n  \"visibility_hours\": 24,\n  \"apply_to_existing\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payroll/settings/visibility",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payroll",
+                "settings",
+                "visibility"
+              ]
+            },
+            "description": "Updates organization-wide default payroll visibility rule and optionally applies to all existing finalized payrolls."
           }
         }
       ]

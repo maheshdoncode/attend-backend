@@ -151,10 +151,69 @@
 
 ---
 
+## GET /api/hrm/employees/next-code
+
+**Auth:** Authenticated (`owner`, `branch_manager`)  
+**Description:** Generates the next sequential available employee code based on existing records in the database (e.g. `EMP001`, `EMP002`, `EMP003`).
+
+### Response
+
+**Success — `200 OK`**
+```json
+{
+  "success": true,
+  "next_code": "EMP002"
+}
+```
+
+**Errors**
+| Code | Reason |
+|------|--------|
+| `401` | Unauthorized / Missing or invalid token |
+| `403` | Forbidden / Insufficient permissions |
+| `500` | Server or database error |
+
+---
+
+## GET /api/hrm/employees/search
+
+**Auth:** Authenticated (`owner`, `branch_manager`)  
+**Description:** Fast, debounced lightweight employee search endpoint returning basic employee identity, email, code, and department.
+
+### Request
+
+**Query Params**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `q` | string | No | Search query term (matches name, email, or employee code) |
+| `limit` | number | No | Number of records to return (default: `10`, max: `50`) |
+
+### Response
+
+**Success — `200 OK`**
+```json
+{
+  "success": true,
+  "employees": [
+    {
+      "id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+      "name": "Alex Smith",
+      "email": "alex@company.com",
+      "role": "employee",
+      "employee_code": "EMP001",
+      "department": "Operations",
+      "is_active": true
+    }
+  ]
+}
+```
+
+---
+
 ## POST /api/hrm/employees
 
 **Auth:** Authenticated (`owner`, `branch_manager`)  
-**Description:** Creates a new employee or branch manager with hashed password, employee profile, and branch assignments. Branch managers can only assign branches within their own scope.
+**Description:** Creates a new employee or branch manager with hashed password, employee profile, and branch assignments. Branch managers can only assign branches within their own scope. `employee_code` is optional and automatically generated sequentially (`EMP001`, `EMP002`, etc.) if omitted.
 
 ### Request
 
@@ -163,13 +222,14 @@
 |-------|------|----------|-------------|
 | `name` | string | ✅ | Full name |
 | `email` | string | ✅ | Unique email address |
-| `password` | string | ✅ | Initial account password |
+| `password` | string | ✅ | Initial account password (minimum 6 characters) |
 | `role` | string | ✅ | Either `'employee'` or `'branch_manager'` |
-| `department` | string | — | Department name |
+| `department` | string | — | Department name (default: `'General'`) |
 | `monthly_salary` | number | — | Monthly gross salary (default: `0`) |
 | `joined_date` | string | — | Date joined in `YYYY-MM-DD` |
-| `employee_code` | string | — | Unique employee identifier code |
+| `employee_code` | string | — | Custom employee code (auto-generated if omitted) |
 | `branch_ids` | array[string] | — | List of branch UUIDs to assign |
+| `shift_assignments` | array[object] | — | List of `{ schedule_id, salary }` objects |
 
 ### Response
 
@@ -187,7 +247,7 @@
     "profile": {
       "id": "d1e2f3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6a",
       "user_id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
-      "employee_code": "EMP102",
+      "employee_code": "EMP001",
       "department": "Operations",
       "monthly_salary": 45000,
       "joined_date": "2026-09-01"
@@ -1630,7 +1690,7 @@
 ## GET /api/hrm/payroll
 
 **Auth:** Authenticated (`owner`, `branch_manager`, `employee`)  
-**Description:** Lists payroll summaries filtered by period, branch, and status. For `employee` callers, results are automatically scoped to their own payslips.
+**Description:** Lists payroll summaries filtered by period, branch, and status. For `employee` callers, results are automatically scoped to their own payslips and only include finalized payrolls that are currently accessible based on their visibility mode (`hours`, `once`, `always`, `hidden`).
 
 ### Request
 
@@ -1654,15 +1714,35 @@
       "id": "6c1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
       "employee_id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
       "employee_name": "Alex Smith",
-      "employee_code": "EMP102",
+      "employee_code": "EMP001",
       "department": "Operations",
       "month": 9,
       "year": 2026,
       "working_days": 22,
+      "present_days": 20,
+      "absent_days": 1,
+      "late_count": 1,
+      "total_late_minutes": 25,
+      "half_day_count": 0,
       "gross_salary": 45000.00,
+      "earned_salary": 45000.00,
       "total_deduction_amount": 2159.09,
+      "advance_deduction": 0,
       "net_salary": 42840.91,
-      "status": "draft"
+      "status": "finalized",
+      "visibility_mode": "hours",
+      "visibility_hours": 24,
+      "view_count": 1,
+      "first_viewed_at": "2026-09-24T12:30:00.000Z",
+      "last_viewed_at": "2026-09-24T14:15:00.000Z",
+      "finalized_at": "2026-09-24T12:00:00.000Z",
+      "is_visible_to_employee": false,
+      "is_accessible_to_employee": true,
+      "is_within_24h": true,
+      "is_expired": false,
+      "hours_remaining": 18.5,
+      "expires_at": "2026-09-25T12:00:00.000Z",
+      "status_label": "Visible (18.5h left)"
     }
   ]
 }
@@ -1673,7 +1753,7 @@
 ## GET /api/hrm/payroll/:employee_id/:month/:year
 
 **Auth:** Authenticated (`owner`, `employee [own only]`, `branch_manager [own only]`)  
-**Description:** Retrieves full itemized payslip breakdown for an employee in a specific month and year. Non-owner users are strictly restricted to their own payslips.
+**Description:** Retrieves full itemized payslip breakdown for an employee in a specific month and year. Non-owner users are strictly restricted to their own payslips. Employees can only access finalized payslips that satisfy the visibility mode (`hours` within limit, `once` if not yet viewed, `always`, or manual override). When an employee accesses a payslip for the first time in `once` mode, it is recorded and subsequent requests return `403 ONE_TIME_VIEW_EXPIRED`.
 
 ### Request
 
@@ -1694,7 +1774,7 @@
     "id": "6c1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
     "employee_id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
     "employee_name": "Alex Smith",
-    "employee_code": "EMP102",
+    "employee_code": "EMP001",
     "department": "Operations",
     "month": 9,
     "year": 2026,
@@ -1702,11 +1782,26 @@
     "present_days": 24,
     "absent_days": 1,
     "late_count": 1,
+    "total_late_minutes": 25,
     "half_day_count": 0,
     "gross_salary": 45000.00,
+    "earned_salary": 45000.00,
     "total_deduction_amount": 1846.15,
+    "advance_deduction": 0,
     "net_salary": 43153.85,
-    "status": "draft",
+    "status": "finalized",
+    "visibility_mode": "hours",
+    "visibility_hours": 24,
+    "view_count": 1,
+    "first_viewed_at": "2026-09-24T12:30:00.000Z",
+    "last_viewed_at": "2026-09-24T14:15:00.000Z",
+    "finalized_at": "2026-09-24T12:00:00.000Z",
+    "is_visible_to_employee": false,
+    "is_accessible_to_employee": true,
+    "is_within_24h": true,
+    "is_expired": false,
+    "hours_remaining": 18.5,
+    "expires_at": "2026-09-25T12:00:00.000Z",
     "deduction_breakdown": [
       {
         "date": "2026-09-08",
@@ -1718,7 +1813,8 @@
         "reason": "Late arrival on 2026-09-15 (25 min late)",
         "amount": 115.38
       }
-    ]
+    ],
+    "daily_records": []
   }
 }
 ```
@@ -1727,6 +1823,9 @@
 | Code | Reason |
 |------|--------|
 | `403` | Non-owner attempted to access another employee's payslip (`FORBIDDEN`) |
+| `403` | Payroll is still in draft state (`PAYROLL_NOT_FINALIZED`) |
+| `403` | Time limit expired (`PAYROLL_VIEW_EXPIRED`, returns `{ is_expired: true }`) |
+| `403` | One-time view already consumed (`ONE_TIME_VIEW_EXPIRED`, returns `{ is_expired: true, view_count: 1 }`) |
 | `404` | Payroll record not found |
 
 ---
@@ -1734,7 +1833,7 @@
 ## PUT /api/hrm/payroll/:id/finalize
 
 **Auth:** Authenticated (`owner`)  
-**Description:** Finalizes a payroll record (`status = 'finalized'`), locking it from further recalculation.
+**Description:** Finalizes a payroll record (`status = 'finalized'`), sets `finalized_at = now()`, initializes `view_count = 0`, and applies configured visibility mode and duration.
 
 ### Request
 
@@ -1742,6 +1841,12 @@
 | Param | Type | Description |
 |-------|------|-------------|
 | `id` | string | Payroll Record UUID |
+
+**Body (Optional)**
+| Field | Type | Description |
+|-------|------|-------------|
+| `visibility_mode` | string | `'hours'`, `'once'`, `'always'`, `'hidden'` (default: `'hours'`) |
+| `visibility_hours` | number | Access window in hours when mode is `'hours'` (default: `24`) |
 
 ### Response
 
@@ -1752,8 +1857,141 @@
   "message": "Payroll successfully finalized",
   "payroll": {
     "id": "6c1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
-    "status": "finalized"
+    "status": "finalized",
+    "visibility_mode": "hours",
+    "visibility_hours": 24,
+    "finalized_at": "2026-09-24T12:00:00.000Z",
+    "view_count": 0,
+    "is_visible_to_employee": false,
+    "is_accessible_to_employee": true,
+    "is_within_24h": true,
+    "is_expired": false,
+    "hours_remaining": 24.0,
+    "expires_at": "2026-09-25T12:00:00.000Z"
   }
+}
+```
+
+---
+
+## PUT /api/hrm/payroll/:id/visibility
+
+**Auth:** Authenticated (`owner`)  
+**Description:** Updates visibility mode (`hours`, `once`, `always`, `hidden`), sets custom duration, resets view count, resets countdown timer, or sets manual override.
+
+### Request
+
+**URL Params**
+| Param | Type | Description |
+|-------|------|-------------|
+| `id` | string | Payroll Record UUID |
+
+**Body**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `visibility_mode` | string | — | `'hours'`, `'once'`, `'always'`, `'hidden'` |
+| `visibility_hours` | number | — | Custom duration in hours (e.g. `1`, `6`, `12`, `24`, `48`, `72`) |
+| `is_visible` | boolean | — | Explicit override (`true` = always visible, `false` = hidden) |
+| `reset_view` | boolean | — | If `true`, resets `view_count = 0` (grants 1 more view for `'once'` mode) |
+| `reset_timer` | boolean | — | If `true`, resets `finalized_at = now()` (restarts duration countdown) |
+
+### Response
+
+**Success — `200 OK`**
+```json
+{
+  "success": true,
+  "message": "Visibility configuration updated successfully",
+  "payroll": {
+    "id": "6c1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+    "visibility_mode": "once",
+    "visibility_hours": 24,
+    "view_count": 0,
+    "is_accessible_to_employee": true,
+    "status_label": "One-Time (Not Viewed)"
+  }
+}
+```
+
+---
+
+## PUT /api/hrm/payroll/bulk-visibility
+
+**Auth:** Authenticated (`owner`)  
+**Description:** Bulk updates visibility modes, durations, or resets for multiple payroll records.
+
+### Request
+
+**Body**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `payroll_ids` | array[string] | ✅ | Array of payroll record UUIDs |
+| `visibility_mode` | string | — | `'hours'`, `'once'`, `'always'`, `'hidden'` |
+| `visibility_hours` | number | — | Custom duration in hours |
+| `is_visible` | boolean | — | Explicit override |
+| `reset_view` | boolean | — | Reset `view_count = 0` for selected records |
+| `reset_timer` | boolean | — | Reset `finalized_at = now()` for selected records |
+
+### Response
+
+**Success — `200 OK`**
+```json
+{
+  "success": true,
+  "message": "Updated visibility for 5 payroll record(s)",
+  "updated_count": 5
+}
+```
+
+---
+
+## GET /api/hrm/payroll/settings/visibility
+
+**Auth:** Authenticated (`owner`, `branch_manager`)  
+**Description:** Retrieves the organization's company-wide default payroll visibility settings used when finalizing payrolls.
+
+### Response
+
+**Success — `200 OK`**
+```json
+{
+  "success": true,
+  "settings": {
+    "visibility_mode": "hours",
+    "visibility_hours": 24
+  }
+}
+```
+
+---
+
+## PUT /api/hrm/payroll/settings/visibility
+
+**Auth:** Authenticated (`owner`)  
+**Description:** Updates the company-wide default payroll visibility configuration and optionally syncs all existing finalized payroll records.
+
+### Request
+
+**Body**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `visibility_mode` | string | — | `'hours'`, `'once'`, `'always'`, `'hidden'` |
+| `visibility_hours` | number | — | Default duration in hours (e.g. `24`) |
+| `apply_to_existing` | boolean | — | If `true`, applies this new policy to all existing finalized payroll records |
+
+### Response
+
+**Success — `200 OK`**
+```json
+{
+  "success": true,
+  "message": "Global payroll visibility settings updated successfully",
+  "settings": {
+    "visibility_mode": "hours",
+    "visibility_hours": 24
+  },
+  "applied_to_existing": true,
+  "updated_count": 12
 }
 ```
 
