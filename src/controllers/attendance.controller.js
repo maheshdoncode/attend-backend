@@ -854,8 +854,48 @@ export class AttendanceController {
 
       const employeeIds = employees.map((e) => e.id);
 
-      // 2. Fetch attendance records for these employees on targetDate
-      let attendanceMap = new Map();
+      // 2. Fetch all work schedules
+      const { data: allSchedules } = await supabase.from('work_schedules').select('*');
+      const scheduleMap = new Map((allSchedules || []).map((s) => [s.id, s]));
+      const defaultSchedule =
+        (allSchedules || []).find((s) => s.is_default) ||
+        allSchedules?.[0] || {
+          id: null,
+          start_time: '09:00:00',
+          end_time: '18:00:00',
+          name: 'Standard Shift',
+        };
+
+      // Fetch shift assignments for all employees
+      const { data: shiftAssignments } = await supabase
+        .from('employee_shift_assignments')
+        .select('employee_id, schedule_id, salary')
+        .in('employee_id', employeeIds);
+
+      const empShiftAssignmentsMap = new Map();
+      (shiftAssignments || []).forEach((sa) => {
+        if (!empShiftAssignmentsMap.has(sa.employee_id)) {
+          empShiftAssignmentsMap.set(sa.employee_id, []);
+        }
+        const sch = scheduleMap.get(sa.schedule_id);
+        if (sch) empShiftAssignmentsMap.get(sa.employee_id).push(sch);
+      });
+
+      // Fetch schedule overrides for these employees
+      const { data: overrides } = await supabase
+        .from('employee_schedule_overrides')
+        .select('employee_id, schedule_id, work_schedules(*)')
+        .in('employee_id', employeeIds);
+
+      const scheduleOverrideMap = new Map();
+      (overrides || []).forEach((ov) => {
+        if (ov.work_schedules) {
+          scheduleOverrideMap.set(ov.employee_id, ov.work_schedules);
+        }
+      });
+
+      // Fetch attendance records for these employees on targetDate
+      let empAttendanceMap = new Map();
       if (employeeIds.length > 0) {
         const { data: attendanceList, error: attErr } = await supabase
           .from('attendance')
@@ -871,36 +911,12 @@ export class AttendanceController {
         }
 
         (attendanceList || []).forEach((record) => {
-          attendanceMap.set(record.employee_id, record);
-        });
-      }
-
-      // Fetch schedule overrides for these employees
-      let scheduleOverrideMap = new Map();
-      if (employeeIds.length > 0) {
-        const { data: overrides } = await supabase
-          .from('employee_schedule_overrides')
-          .select('employee_id, schedule_id, work_schedules(*)')
-          .in('employee_id', employeeIds);
-
-        (overrides || []).forEach((ov) => {
-          if (ov.work_schedules) {
-            scheduleOverrideMap.set(ov.employee_id, ov.work_schedules);
+          if (!empAttendanceMap.has(record.employee_id)) {
+            empAttendanceMap.set(record.employee_id, []);
           }
+          empAttendanceMap.get(record.employee_id).push(record);
         });
       }
-
-      // Fetch default work schedule
-      const { data: defaultSchedule } = await supabase
-        .from('work_schedules')
-        .select('*')
-        .eq('is_default', true)
-        .maybeSingle();
-
-      const fallbackSchedule = defaultSchedule || {
-        start_time: '09:00:00',
-        end_time: '18:00:00',
-      };
 
       // 3. Merge attendance with employees & compute summary counts
       let presentCount = 0;
@@ -910,16 +926,60 @@ export class AttendanceController {
       let notMarkedCount = 0;
 
       let roster = employees.map((emp) => {
-        const att = attendanceMap.get(emp.id);
-        const empSchedule = scheduleOverrideMap.get(emp.id) || fallbackSchedule;
-        const attStatus = resolveEmployeeAttendanceStatus(att, empSchedule, targetDate);
-        const isPresent = ['present', 'late', 'half_day'].includes(attStatus);
+        const assignedShifts = empShiftAssignmentsMap.get(emp.id) || [];
+        const effectiveShifts =
+          assignedShifts.length > 0
+            ? assignedShifts
+            : [scheduleOverrideMap.get(emp.id) || defaultSchedule];
 
-        if (attStatus === 'present') presentCount++;
-        else if (attStatus === 'late') lateCount++;
-        else if (attStatus === 'half_day') halfDayCount++;
-        else if (attStatus === 'absent') absentCount++;
+        const attList = empAttendanceMap.get(emp.id) || [];
+
+        const shifts = effectiveShifts.map((sch) => {
+          let att = attList.find((a) => a.schedule_id === sch.id);
+          if (!att && attList.length === 1 && !attList[0].schedule_id) {
+            att = attList[0];
+          }
+
+          const attStatus = resolveEmployeeAttendanceStatus(att, sch, targetDate);
+
+          return {
+            schedule_id: sch.id,
+            schedule_name: sch.name || 'Day Shift',
+            start_time: sch.start_time,
+            end_time: sch.end_time,
+            clock_in_time: att?.clock_in_time || null,
+            clock_out_time: att?.clock_out_time || null,
+            status: attStatus,
+            attendance_status: attStatus,
+            attendance_id: att?.id || null,
+            is_flagged: att?.is_flagged || false,
+            flag_reason: att?.flag_reason || null,
+            admin_notes: att?.admin_notes || null,
+          };
+        });
+
+        // Derive aggregate status
+        const hasPresent = shifts.some((s) => s.status === 'present');
+        const hasLate = shifts.some((s) => s.status === 'late');
+        const hasHalfDay = shifts.some((s) => s.status === 'half_day');
+        const hasAbsent = shifts.some((s) => s.status === 'absent');
+        const isFlagged = shifts.some((s) => s.is_flagged);
+        const flaggedShift = shifts.find((s) => s.is_flagged);
+
+        let overallStatus = 'not_marked';
+        if (hasLate) overallStatus = 'late';
+        else if (hasHalfDay) overallStatus = 'half_day';
+        else if (hasPresent) overallStatus = 'present';
+        else if (hasAbsent) overallStatus = 'absent';
+
+        if (overallStatus === 'present') presentCount++;
+        else if (overallStatus === 'late') lateCount++;
+        else if (overallStatus === 'half_day') halfDayCount++;
+        else if (overallStatus === 'absent') absentCount++;
         else notMarkedCount++;
+
+        const primaryShift = shifts[0] || {};
+        const isPresent = ['present', 'late', 'half_day'].includes(overallStatus);
 
         return {
           id: emp.id,
@@ -932,14 +992,15 @@ export class AttendanceController {
           branch_name: emp.branches?.[0]?.name || null,
           branch_id: emp.branch_ids?.[0] || null,
           is_present: isPresent,
-          status: attStatus,
-          attendance_status: attStatus,
-          attendance_id: att?.id || null,
-          clock_in_time: att?.clock_in_time || null,
-          clock_out_time: att?.clock_out_time || null,
-          is_flagged: att?.is_flagged || false,
-          flag_reason: att?.flag_reason || null,
-          admin_notes: att?.admin_notes || null,
+          status: overallStatus,
+          attendance_status: overallStatus,
+          attendance_id: primaryShift.attendance_id || null,
+          clock_in_time: primaryShift.clock_in_time || null,
+          clock_out_time: primaryShift.clock_out_time || null,
+          is_flagged: isFlagged,
+          flag_reason: flaggedShift?.flag_reason || primaryShift.flag_reason || null,
+          admin_notes: primaryShift.admin_notes || null,
+          shifts,
         };
       });
 
