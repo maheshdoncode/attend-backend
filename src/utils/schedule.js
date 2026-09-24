@@ -20,7 +20,18 @@ export const parseTimeToMinutes = (timeStr) => {
  */
 export const getMinutesFromMidnight = (dateInput) => {
   const d = new Date(dateInput);
-  return d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+  try {
+    const timeStr = d.toLocaleTimeString('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    return parseTimeToMinutes(timeStr);
+  } catch (e) {
+    return d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+  }
 };
 
 /**

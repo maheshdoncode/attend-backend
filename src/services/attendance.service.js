@@ -432,7 +432,12 @@ export class AttendanceService {
     }
 
     const now = time ? new Date(time) : new Date();
-    const today = now.toISOString().split('T')[0];
+    let today;
+    try {
+      today = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    } catch (e) {
+      today = now.toISOString().split('T')[0];
+    }
 
     let effectiveBranchId = branch_id;
     if (!effectiveBranchId) {
@@ -470,19 +475,33 @@ export class AttendanceService {
         schedule = await getEmployeeSchedule(employee_id);
       }
       const lateMinutes = computeLateMinutes(now, schedule.start_time);
-      const { data: latePolicy } = await supabase
+      const { data: latePolicies } = await supabase
         .from('deduction_policies')
         .select('*')
         .eq('condition_type', 'late_arrival')
-        .eq('is_active', true)
-        .maybeSingle();
+        .eq('is_active', true);
+
+      const applicableLatePolicies = (latePolicies || [])
+        .filter((p) => !p.schedule_id || (schedule.id && p.schedule_id === schedule.id))
+        .sort((a, b) => (Number(b.threshold_minutes) || 0) - (Number(a.threshold_minutes) || 0));
+
+      const matchedLatePolicy = applicableLatePolicies.find(
+        (p) => lateMinutes > (Number(p.threshold_minutes) || 0)
+      ) || null;
 
       let status = 'present';
-      const lateThreshold = latePolicy?.threshold_minutes ?? 10;
-      if (lateMinutes > lateThreshold) {
-        status = 'late';
+      let isFlagged = false;
+      let flagReason = null;
+
+      if (matchedLatePolicy && lateMinutes > (Number(matchedLatePolicy.threshold_minutes) || 0)) {
+        status = matchedLatePolicy.deduction_type === 'half_day' ? 'half_day' : 'late';
+        flagReason = matchedLatePolicy.name
+          ? `Late arrival (${lateMinutes} min late • ${matchedLatePolicy.name})`
+          : `Late arrival (${lateMinutes} min late)`;
+        isFlagged = true;
       } else if (isHalfDay(now, schedule)) {
         status = 'half_day';
+        flagReason = 'Half Day';
       }
 
       const payload = {
@@ -494,7 +513,8 @@ export class AttendanceService {
         clock_in_lat: null,
         clock_in_lng: null,
         status,
-        is_flagged: false,
+        is_flagged: isFlagged,
+        flag_reason: flagReason,
         admin_notes: admin_notes || 'Manual Clock-In by Admin/Manager',
       };
 
