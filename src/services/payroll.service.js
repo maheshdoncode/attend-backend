@@ -391,24 +391,29 @@ export class PayrollService {
                 amount,
               });
             }
-          } else if (record.status === 'half_day') {
-            halfDayCount++;
+          } else {
             presentDays++;
-            const amount = Number((shiftDailyRate / 2).toFixed(2));
-            if (amount > 0) {
-              totalDeductions += amount;
-              deductionBreakdown.push({
-                date: dateStr,
-                type: 'half_day',
-                reason: assignedShifts.length > 1 ? `Half Day (${shiftSchedule.name})` : 'Half Day',
-                policy_name: assignedShifts.length > 1 ? `Half Day (${shiftSchedule.name})` : 'Half Day',
-                amount,
-              });
+            let shiftDeductionApplied = 0;
+
+            // 1. Half Day Deduction
+            const isHalfDayRecord = record.status === 'half_day';
+            if (isHalfDayRecord) {
+              halfDayCount++;
+              const halfDayAmount = Number((shiftDailyRate / 2).toFixed(2));
+              if (halfDayAmount > 0) {
+                totalDeductions += halfDayAmount;
+                shiftDeductionApplied += halfDayAmount;
+                deductionBreakdown.push({
+                  date: dateStr,
+                  type: 'half_day',
+                  reason: assignedShifts.length > 1 ? `Half Day (${shiftSchedule.name})` : 'Half Day',
+                  policy_name: assignedShifts.length > 1 ? `Half Day (${shiftSchedule.name})` : 'Half Day',
+                  amount: halfDayAmount,
+                });
+              }
             }
-          } else if (record.status === 'late') {
-            lateCount++;
-            presentDays++;
-            let lateDeduction = 0;
+
+            // 2. Late Arrival Deduction (additive)
             const lateMins = record.clock_in_time
               ? computeLateMinutes(record.clock_in_time, shiftSchedule.start_time)
               : 0;
@@ -422,29 +427,31 @@ export class PayrollService {
             ) || null;
 
             if (matchedLatePolicy && lateMins > (Number(matchedLatePolicy.threshold_minutes) || 0)) {
+              lateCount++;
+              let lateDeduction = 0;
               if (matchedLatePolicy.deduction_type === 'fixed_minutes') {
                 const deductionMins = matchedLatePolicy.deduction_minutes || 30;
                 lateDeduction = (deductionMins / shiftMinutes) * shiftDailyRate;
               } else if (matchedLatePolicy.deduction_type === 'half_day') {
-                lateDeduction = shiftDailyRate / 2;
+                if (!isHalfDayRecord) {
+                  lateDeduction = shiftDailyRate / 2;
+                }
               } else if (matchedLatePolicy.deduction_type === 'full_day') {
-                lateDeduction = shiftDailyRate;
+                lateDeduction = Math.max(0, shiftDailyRate - shiftDeductionApplied);
+              }
+
+              if (lateDeduction > 0) {
+                const amount = Number(lateDeduction.toFixed(2));
+                totalDeductions += amount;
+                deductionBreakdown.push({
+                  date: dateStr,
+                  type: 'late_arrival',
+                  reason: assignedShifts.length > 1 ? `${lateMins} min late (${shiftSchedule.name})` : `${lateMins} min late`,
+                  policy_name: matchedLatePolicy?.name || 'Late Arrival Policy',
+                  amount,
+                });
               }
             }
-
-            if (lateDeduction > 0) {
-              const amount = Number(lateDeduction.toFixed(2));
-              totalDeductions += amount;
-              deductionBreakdown.push({
-                date: dateStr,
-                type: 'late_arrival',
-                reason: assignedShifts.length > 1 ? `${lateMins} min late (${shiftSchedule.name})` : `${lateMins} min late`,
-                policy_name: matchedLatePolicy?.name || 'Late Arrival Policy',
-                amount,
-              });
-            }
-          } else if (record.status === 'present') {
-            presentDays++;
           }
         }
       }

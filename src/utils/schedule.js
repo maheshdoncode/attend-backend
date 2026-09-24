@@ -120,6 +120,13 @@ export const computeLateMinutes = (clockInTime, scheduleStartTime) => {
  * @param {object} schedule - { start_time: '09:00', end_time: '18:00' }
  * @returns {boolean}
  */
+export const computeEarlyMinutes = (clockOutTime, scheduleEndTime) => {
+  const clockOutMinutes = getMinutesFromMidnight(clockOutTime);
+  const scheduleMinutes = parseTimeToMinutes(scheduleEndTime);
+  const diff = Math.floor(scheduleMinutes - clockOutMinutes);
+  return Math.max(0, diff);
+};
+
 export const isHalfDay = (clockInTime, schedule) => {
   if (!schedule || !schedule.start_time || !schedule.end_time) return false;
   const startMinutes = parseTimeToMinutes(schedule.start_time);
@@ -238,6 +245,7 @@ export default {
   getEmployeeSchedule,
   isHoliday,
   computeLateMinutes,
+  computeEarlyMinutes,
   isHalfDay,
   getEmployeeSchedules,
   getEmployeeActiveShift,

@@ -1,7 +1,16 @@
 import { supabase } from '../db/supabase.js';
 import { isWithinRadius } from '../utils/geo.js';
 import { validateQRPayload } from '../utils/qr.js';
-import { getEmployeeSchedule, getEmployeeActiveShift, parseTimeToMinutes, getMinutesFromMidnight, isHoliday, computeLateMinutes, isHalfDay } from '../utils/schedule.js';
+import {
+  getEmployeeSchedule,
+  getEmployeeActiveShift,
+  parseTimeToMinutes,
+  getMinutesFromMidnight,
+  isHoliday,
+  computeLateMinutes,
+  computeEarlyMinutes,
+  isHalfDay,
+} from '../utils/schedule.js';
 
 export class AttendanceService {
   /**
@@ -544,10 +553,99 @@ export class AttendanceService {
         throw { status: 409, code: 'ALREADY_CLOCKED_OUT', message: 'Employee is already clocked out today' };
       }
 
+      let schedule = null;
+      if (existingAttendance.schedule_id) {
+        const { data: sch } = await supabase.from('work_schedules').select('*').eq('id', existingAttendance.schedule_id).maybeSingle();
+        if (sch) schedule = sch;
+      }
+      if (!schedule) {
+        schedule = await getEmployeeSchedule(employee_id);
+      }
+
       const clockInTime = new Date(existingAttendance.clock_in_time);
       if (now < clockInTime) {
         throw { status: 400, code: 'INVALID_TIME', message: 'Clock-out time must be at or after clock-in time' };
       }
+
+      // 1. Evaluate Late Arrival
+      const lateMinutes = computeLateMinutes(clockInTime, schedule.start_time);
+      const { data: latePolicies } = await supabase
+        .from('deduction_policies')
+        .select('*')
+        .eq('condition_type', 'late_arrival')
+        .eq('is_active', true);
+
+      const applicableLatePolicies = (latePolicies || [])
+        .filter((p) => !p.schedule_id || (schedule.id && p.schedule_id === schedule.id))
+        .sort((a, b) => (Number(b.threshold_minutes) || 0) - (Number(a.threshold_minutes) || 0));
+
+      const matchedLatePolicy = applicableLatePolicies.find(
+        (p) => lateMinutes > (Number(p.threshold_minutes) || 0)
+      ) || null;
+
+      let lateFlag = null;
+      let lateStatus = 'present';
+      if (matchedLatePolicy && lateMinutes > (Number(matchedLatePolicy.threshold_minutes) || 0)) {
+        lateStatus = matchedLatePolicy.deduction_type === 'half_day' ? 'half_day' : 'late';
+        lateFlag = matchedLatePolicy.name
+          ? `Late arrival (${lateMinutes} min late • ${matchedLatePolicy.name})`
+          : `Late arrival (${lateMinutes} min late)`;
+      }
+
+      // 2. Evaluate Early Departure & Half Day
+      const earlyMinutes = computeEarlyMinutes(now, schedule.end_time);
+      const { data: earlyPolicies } = await supabase
+        .from('deduction_policies')
+        .select('*')
+        .eq('condition_type', 'early_departure')
+        .eq('is_active', true);
+
+      const applicableEarlyPolicies = (earlyPolicies || [])
+        .filter((p) => !p.schedule_id || (schedule.id && p.schedule_id === schedule.id))
+        .sort((a, b) => (Number(b.threshold_minutes) || 0) - (Number(a.threshold_minutes) || 0));
+
+      const matchedEarlyPolicy = applicableEarlyPolicies.find(
+        (p) => earlyMinutes > (Number(p.threshold_minutes) || 0)
+      ) || null;
+
+      let earlyFlag = null;
+      let isHalfDayEarly = false;
+      if (matchedEarlyPolicy && earlyMinutes > (Number(matchedEarlyPolicy.threshold_minutes) || 0)) {
+        if (matchedEarlyPolicy.deduction_type === 'half_day') {
+          isHalfDayEarly = true;
+        }
+        earlyFlag = matchedEarlyPolicy.name
+          ? `Early departure (${earlyMinutes} min early • ${matchedEarlyPolicy.name})`
+          : `Early departure (${earlyMinutes} min early)`;
+      }
+
+      // Check if total worked time is less than half shift
+      const shiftStartMins = parseTimeToMinutes(schedule.start_time);
+      let shiftEndMins = parseTimeToMinutes(schedule.end_time);
+      if (shiftEndMins <= shiftStartMins) shiftEndMins += 24 * 60;
+      const totalShiftMins = Math.max(60, shiftEndMins - shiftStartMins);
+      const workedMins = Math.floor((now.getTime() - clockInTime.getTime()) / 60000);
+      if (workedMins < totalShiftMins / 2) {
+        isHalfDayEarly = true;
+        if (!earlyFlag) {
+          earlyFlag = `Half Day (${Math.floor(workedMins / 60)}h ${workedMins % 60}m worked of ${Math.floor(totalShiftMins / 60)}h shift)`;
+        }
+      }
+
+      // 3. Combined Status & Combined Flags
+      let finalStatus = 'present';
+      if (isHalfDayEarly || lateStatus === 'half_day') {
+        finalStatus = 'half_day';
+      } else if (lateStatus === 'late') {
+        finalStatus = 'late';
+      }
+
+      const flags = [];
+      if (lateFlag) flags.push(lateFlag);
+      if (earlyFlag) flags.push(earlyFlag);
+
+      const isFlagged = flags.length > 0;
+      const flagReason = flags.length > 0 ? flags.join(' • ') : null;
 
       const { data, error } = await supabase
         .from('attendance')
@@ -555,7 +653,9 @@ export class AttendanceService {
           clock_out_time: now.toISOString(),
           clock_out_lat: null,
           clock_out_lng: null,
-          is_flagged: false,
+          status: finalStatus,
+          is_flagged: isFlagged,
+          flag_reason: flagReason,
           admin_notes: admin_notes || existingAttendance.admin_notes || 'Manual Clock-Out by Admin/Manager',
         })
         .eq('id', existingAttendance.id)
