@@ -159,17 +159,16 @@ export class AttendanceService {
       .sort((a, b) => (Number(b.threshold_minutes) || 0) - (Number(a.threshold_minutes) || 0));
 
     const matchedLatePolicy = applicableLatePolicies.find(
-      (p) => lateMinutes > (p.threshold_minutes ?? 10)
-    ) || applicableLatePolicies[0];
+      (p) => lateMinutes > (Number(p.threshold_minutes) || 0)
+    ) || null;
 
     let status = 'present';
     let isFlagged = false;
     let flagReason = null;
-    const lateThreshold = matchedLatePolicy?.threshold_minutes ?? 10;
 
-    if (lateMinutes > lateThreshold) {
-      status = matchedLatePolicy?.deduction_type === 'half_day' ? 'half_day' : 'late';
-      flagReason = matchedLatePolicy?.name
+    if (matchedLatePolicy && lateMinutes > (Number(matchedLatePolicy.threshold_minutes) || 0)) {
+      status = matchedLatePolicy.deduction_type === 'half_day' ? 'half_day' : 'late';
+      flagReason = matchedLatePolicy.name
         ? `Late arrival (${lateMinutes} min late • ${matchedLatePolicy.name})`
         : `Late arrival (${lateMinutes} min late)`;
       isFlagged = true;

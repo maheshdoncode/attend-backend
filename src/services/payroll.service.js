@@ -413,14 +413,15 @@ export class PayrollService {
               ? computeLateMinutes(record.clock_in_time, shiftSchedule.start_time)
               : 0;
 
-            const applicableLatePolicies = latePolicies.filter(
-              (p) => !p.schedule_id || (shiftSchedule.id && p.schedule_id === shiftSchedule.id)
-            );
-            const matchedLatePolicy = applicableLatePolicies.find(
-              (p) => lateMins > (p.threshold_minutes ?? 10)
-            ) || applicableLatePolicies[0];
+            const applicableLatePolicies = latePolicies
+              .filter((p) => !p.schedule_id || (shiftSchedule.id && p.schedule_id === shiftSchedule.id))
+              .sort((a, b) => (Number(b.threshold_minutes) || 0) - (Number(a.threshold_minutes) || 0));
 
-            if (matchedLatePolicy && lateMins > (matchedLatePolicy.threshold_minutes ?? 10)) {
+            const matchedLatePolicy = applicableLatePolicies.find(
+              (p) => lateMins > (Number(p.threshold_minutes) || 0)
+            ) || null;
+
+            if (matchedLatePolicy && lateMins > (Number(matchedLatePolicy.threshold_minutes) || 0)) {
               if (matchedLatePolicy.deduction_type === 'fixed_minutes') {
                 const deductionMins = matchedLatePolicy.deduction_minutes || 30;
                 lateDeduction = (deductionMins / shiftMinutes) * shiftDailyRate;
