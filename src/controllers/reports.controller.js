@@ -1,5 +1,9 @@
 import { supabase } from '../db/supabase.js';
-import { generateAttendanceExcel, generatePayrollPDF } from '../utils/export.js';
+import {
+  generateAttendanceExcel,
+  generatePayrollPDF,
+  generatePayrollExcel,
+} from '../utils/export.js';
 
 export class ReportsController {
   /**
@@ -516,10 +520,12 @@ export class ReportsController {
             id: r.id,
             name: user?.name || 'Unknown',
             employee_code: profile?.employee_code || '-',
+            department: profile?.department || 'General',
             gross_salary: Number(r.gross_salary),
             total_deduction_amount: Number(r.total_deduction_amount),
             deduction_breakdown: r.deduction_breakdown || [],
             net_salary: Number(r.net_salary),
+            status: r.status || 'draft',
             branch_ids: branchIds,
           };
         });
@@ -533,6 +539,19 @@ export class ReportsController {
           formatted = formatted.filter((item) =>
             item.branch_ids.some((b) => scopedIds.has(b))
           );
+        }
+
+        if (format === 'excel' || format === 'xlsx') {
+          const excelBuffer = await generatePayrollExcel(formatted, monthNum, yearNum);
+          res.setHeader(
+            'Content-Type',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          );
+          res.setHeader(
+            'Content-Disposition',
+            `attachment; filename=payroll_report_${monthNum}_${yearNum}.xlsx`
+          );
+          return res.send(excelBuffer);
         }
 
         const pdfBuffer = await generatePayrollPDF(formatted, monthNum, yearNum);
