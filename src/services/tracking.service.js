@@ -101,14 +101,14 @@ export class TrackingService {
         startTime = existingHistory.start_time || startTime;
       }
 
-      // Append new points with small displacement filter to prevent stationary bloating
+      // Append new points with displacement/time filter
       validPoints.forEach((np) => {
         if (currentPoints.length > 0) {
           const lastP = currentPoints[currentPoints.length - 1];
           const dist = calculateDistanceKm(lastP.lat, lastP.lng, np.lat, np.lng);
-          // Only append if moved > 5 meters or interval > 5 mins
+          // Append if moved > 5 meters or interval >= 30 seconds
           const timeDiffMs = Math.abs(new Date(np.t).getTime() - new Date(lastP.t).getTime());
-          if (dist >= 0.005 || timeDiffMs > 5 * 60 * 1000) {
+          if (dist >= 0.005 || timeDiffMs >= 30 * 1000) {
             currentPoints.push(np);
             totalDistance += dist;
           }
@@ -127,12 +127,32 @@ export class TrackingService {
         updated_at: new Date().toISOString(),
       };
 
-      const { error: histErr } = await supabase
-        .from('employee_location_history')
-        .upsert(historyPayload, { onConflict: 'employee_id,date' });
+      if (existingHistory && existingHistory.id) {
+        const { error: updateErr } = await supabase
+          .from('employee_location_history')
+          .update({
+            points: currentPoints,
+            total_distance_km: Number(totalDistance.toFixed(2)),
+            start_time: startTime,
+            end_time: endTime,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existingHistory.id);
 
-      if (histErr) {
-        console.error('Error saving location history batch:', histErr);
+        if (updateErr) {
+          console.error('Error updating location history by id:', updateErr);
+        }
+      } else {
+        const { error: insertErr } = await supabase
+          .from('employee_location_history')
+          .insert(historyPayload);
+
+        if (insertErr) {
+          console.error('Error inserting location history, trying upsert:', insertErr);
+          await supabase
+            .from('employee_location_history')
+            .upsert(historyPayload, { onConflict: 'employee_id,date' });
+        }
       }
     }
 
@@ -147,7 +167,7 @@ export class TrackingService {
    * Returns all active employee live positions for Owner / Branch Manager Live Map
    */
   static async getLiveLocations(filters = {}) {
-    const { branch_id, scopedBranchIds } = filters;
+    const { branch_id, search, status, scopedBranchIds } = filters;
 
     // 1. Fetch live location rows with user profile & branch assignments
     let query = supabase
@@ -252,6 +272,24 @@ export class TrackingService {
       filtered = filtered.filter((item) => item.branch_id && scopeSet.has(item.branch_id));
     }
 
+    // Apply search query filter (name, employee code, department)
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      filtered = filtered.filter(
+        (item) =>
+          (item.name || '').toLowerCase().includes(q) ||
+          (item.employee_code || '').toLowerCase().includes(q) ||
+          (item.department || '').toLowerCase().includes(q)
+      );
+    }
+
+    // Apply online/offline status filter
+    if (status === 'online') {
+      filtered = filtered.filter((item) => item.is_online);
+    } else if (status === 'offline') {
+      filtered = filtered.filter((item) => !item.is_online);
+    }
+
     return filtered;
   }
 
@@ -308,6 +346,26 @@ export class TrackingService {
       accuracy: Number(p.acc || p.accuracy || 0),
     }));
 
+    // If history points were empty, fallback to latest known live location for today
+    if (rawPoints.length === 0) {
+      const { data: liveLoc } = await supabase
+        .from('employee_live_locations')
+        .select('*')
+        .eq('employee_id', employeeId)
+        .maybeSingle();
+
+      if (liveLoc && liveLoc.latitude && liveLoc.longitude) {
+        rawPoints.push({
+          lat: Number(liveLoc.latitude),
+          lng: Number(liveLoc.longitude),
+          time: liveLoc.last_updated_at || new Date().toISOString(),
+          speed: Number(liveLoc.speed || 0),
+          heading: Number(liveLoc.heading || 0),
+          accuracy: Number(liveLoc.accuracy || 0),
+        });
+      }
+    }
+
     // Detect Stops / Halts (stationary for > 4 minutes)
     const stops = [];
     let currentStopGroup = [];
@@ -357,11 +415,13 @@ export class TrackingService {
       }
     }
 
-    // Top Speed & Timeline calculation
     let maxSpeed = 0;
     rawPoints.forEach((p) => {
       if (p.speed > maxSpeed) maxSpeed = p.speed;
     });
+
+    const totalDistanceKm = Number((historyRes.data?.total_distance_km || 0).toFixed(2));
+    const totalStopsDurationMins = stops.reduce((acc, s) => acc + s.duration_minutes, 0);
 
     const clockInTime = attendanceRes.data?.clock_in_time || null;
     const clockOutTime = attendanceRes.data?.clock_out_time || null;

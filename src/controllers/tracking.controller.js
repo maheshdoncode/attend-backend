@@ -28,18 +28,15 @@ export class TrackingController {
     }
   }
 
-  /**
-   * GET /api/hrm/tracking/live
-   * Returns current live location radar across employees
-   * Accessible by: owner, branch_manager
-   */
   static async getLiveLocations(req, res) {
     try {
-      const { branch_id } = req.query;
+      const { branch_id, search, status } = req.query;
       const scopedBranchIds = req.user.role === 'branch_manager' ? req.scopedBranchIds : undefined;
 
       const locations = await TrackingService.getLiveLocations({
         branch_id,
+        search,
+        status,
         scopedBranchIds,
       });
 
