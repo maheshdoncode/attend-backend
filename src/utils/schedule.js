@@ -1,11 +1,22 @@
 import { supabase } from '../db/supabase.js';
 
 /**
- * Parses time string (e.g. '09:00:00' or '09:00') into total minutes from midnight.
- * @param {string} timeStr
+ * Parses time string (e.g. '09:00:00' or '09:00') or schedule object into total minutes from midnight.
+ * @param {string|object|Date|number} timeInput
  * @returns {number}
  */
-export const parseTimeToMinutes = (timeStr) => {
+export const parseTimeToMinutes = (timeInput) => {
+  if (!timeInput) return 0;
+  if (typeof timeInput === 'number') return timeInput;
+  if (timeInput instanceof Date) {
+    return timeInput.getHours() * 60 + timeInput.getMinutes();
+  }
+  if (typeof timeInput === 'object') {
+    if (timeInput.start_time) return parseTimeToMinutes(timeInput.start_time);
+    if (timeInput.end_time) return parseTimeToMinutes(timeInput.end_time);
+    return 0;
+  }
+  const timeStr = String(timeInput).trim();
   if (!timeStr) return 0;
   const parts = timeStr.split(':').map(Number);
   const hours = parts[0] || 0;
@@ -19,7 +30,9 @@ export const parseTimeToMinutes = (timeStr) => {
  * @returns {number}
  */
 export const getMinutesFromMidnight = (dateInput) => {
+  if (!dateInput) return 0;
   const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return 0;
   try {
     const timeStr = d.toLocaleTimeString('en-GB', {
       timeZone: 'Asia/Kolkata',
@@ -104,25 +117,35 @@ export const isHoliday = async (dateStr, branch_id = null) => {
 /**
  * Computes how many minutes after schedule start the employee clocked in (0 if on time).
  * @param {Date|string} clockInTime
- * @param {string} scheduleStartTime - 'HH:MM' or 'HH:MM:SS'
+ * @param {string|object} scheduleOrStartTime - 'HH:MM' or schedule object
  * @returns {number}
  */
-export const computeLateMinutes = (clockInTime, scheduleStartTime) => {
+export const computeLateMinutes = (clockInTime, scheduleOrStartTime) => {
+  if (!clockInTime) return 0;
+  const startTime =
+    typeof scheduleOrStartTime === 'object' && scheduleOrStartTime !== null
+      ? scheduleOrStartTime.start_time || '09:00:00'
+      : scheduleOrStartTime;
   const clockInMinutes = getMinutesFromMidnight(clockInTime);
-  const scheduleMinutes = parseTimeToMinutes(scheduleStartTime);
+  const scheduleMinutes = parseTimeToMinutes(startTime);
   const diff = Math.floor(clockInMinutes - scheduleMinutes);
   return Math.max(0, diff);
 };
 
 /**
- * Determines if clock in time is after the midpoint of schedule start -> end.
- * @param {Date|string} clockInTime
- * @param {object} schedule - { start_time: '09:00', end_time: '18:00' }
- * @returns {boolean}
+ * Determines how many minutes before schedule end the employee clocked out.
+ * @param {Date|string} clockOutTime
+ * @param {string|object} scheduleOrEndTime - 'HH:MM' or schedule object
+ * @returns {number}
  */
-export const computeEarlyMinutes = (clockOutTime, scheduleEndTime) => {
+export const computeEarlyMinutes = (clockOutTime, scheduleOrEndTime) => {
+  if (!clockOutTime) return 0;
+  const endTime =
+    typeof scheduleOrEndTime === 'object' && scheduleOrEndTime !== null
+      ? scheduleOrEndTime.end_time || '18:00:00'
+      : scheduleOrEndTime;
   const clockOutMinutes = getMinutesFromMidnight(clockOutTime);
-  const scheduleMinutes = parseTimeToMinutes(scheduleEndTime);
+  const scheduleMinutes = parseTimeToMinutes(endTime);
   const diff = Math.floor(scheduleMinutes - clockOutMinutes);
   return Math.max(0, diff);
 };

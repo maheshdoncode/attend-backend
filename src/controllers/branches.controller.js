@@ -16,6 +16,7 @@ export class BranchesController {
         longitude,
         radius_meters = 100,
         qr_type = 'static',
+        lunch_tracking_mode = 'inherit',
       } = req.body;
 
       if (!name || latitude === undefined || longitude === undefined) {
@@ -41,6 +42,7 @@ export class BranchesController {
           radius_meters: Number(radius_meters) || 100,
           qr_secret,
           qr_type: qr_type === 'dynamic' ? 'dynamic' : 'static',
+          lunch_tracking_mode: lunch_tracking_mode || 'inherit',
           is_active: true,
         })
         .select()
@@ -161,8 +163,16 @@ export class BranchesController {
   static async update(req, res) {
     try {
       const { id } = req.params;
-      const { name, address, latitude, longitude, radius_meters, qr_type, is_active } =
-        req.body;
+      const {
+        name,
+        address,
+        latitude,
+        longitude,
+        radius_meters,
+        qr_type,
+        lunch_tracking_mode,
+        is_active,
+      } = req.body;
 
       const updates = {};
       if (name !== undefined) updates.name = name;
@@ -171,6 +181,7 @@ export class BranchesController {
       if (longitude !== undefined) updates.longitude = Number(longitude);
       if (radius_meters !== undefined) updates.radius_meters = Number(radius_meters);
       if (qr_type !== undefined) updates.qr_type = qr_type;
+      if (lunch_tracking_mode !== undefined) updates.lunch_tracking_mode = lunch_tracking_mode;
       if (is_active !== undefined) updates.is_active = is_active;
 
       const { data: branch, error } = await supabase

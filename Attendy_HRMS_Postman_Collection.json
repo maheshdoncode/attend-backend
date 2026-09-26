@@ -573,6 +573,60 @@
           }
         },
         {
+          "name": "Start Lunch Break",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 21.1702,\n  \"longitude\": 72.8311\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/attendance/lunch-start",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "attendance",
+                "lunch-start"
+              ]
+            },
+            "description": "Starts employee lunch break for the active shift."
+          }
+        },
+        {
+          "name": "End Lunch Break",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 21.1702,\n  \"longitude\": 72.8311\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/attendance/lunch-end",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "attendance",
+                "lunch-end"
+              ]
+            },
+            "description": "Ends employee lunch break and records duration."
+          }
+        },
+        {
           "name": "Daily Attendance Status (All Employees & Status Filter)",
           "request": {
             "method": "GET",
@@ -1146,6 +1200,51 @@
           }
         },
         {
+          "name": "Update Draft Payroll Figures",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"gross_salary\": 45000,\n  \"earned_salary\": 42500,\n  \"total_deduction_amount\": 2500,\n  \"advance_deduction\": 1000,\n  \"net_salary\": 40000,\n  \"working_days\": 26,\n  \"present_days\": 24,\n  \"absent_days\": 2,\n  \"half_day_count\": 0,\n  \"late_count\": 1,\n  \"total_late_minutes\": 15,\n  \"deduction_breakdown\": [\n    {\n      \"date\": \"2026-09-12\",\n      \"type\": \"late\",\n      \"reason\": \"Late arrival (15m)\",\n      \"amount\": 250\n    },\n    {\n      \"date\": \"2026-09-20\",\n      \"type\": \"custom\",\n      \"reason\": \"Performance Bonus\",\n      \"amount\": -500\n    }\n  ],\n  \"admin_notes\": \"Adjusted bonus and waived late penalty as approved.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payroll/{{payrollId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payroll",
+                "{{payrollId}}"
+              ]
+            },
+            "description": "Allows the owner to manually modify amounts, attendance day counts, and deduction line items for a draft payroll before finalizing it."
+          }
+        },
+        {
+          "name": "Reset Draft Payroll to Auto-Calculated",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/payroll/{{payrollId}}/reset",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payroll",
+                "{{payrollId}}",
+                "reset"
+              ]
+            },
+            "description": "Restores original attendance-calculated figures snapshot for a draft payroll, discarding manual edits."
+          }
+        },
+        {
           "name": "Finalize Payroll Record",
           "request": {
             "method": "PUT",
@@ -1401,6 +1500,57 @@
               ]
             },
             "description": "Streams .pdf document with formatted summary table."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Organization Settings",
+      "item": [
+        {
+          "name": "Get Lunch Tracking Settings",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/organization/settings/lunch-tracking",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "organization",
+                "settings",
+                "lunch-tracking"
+              ]
+            },
+            "description": "Fetches global company-wide lunch break tracking configuration."
+          }
+        },
+        {
+          "name": "Update Lunch Tracking Settings",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/organization/settings/lunch-tracking",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "organization",
+                "settings",
+                "lunch-tracking"
+              ]
+            },
+            "description": "Updates global company-wide lunch break tracking configuration."
           }
         }
       ]

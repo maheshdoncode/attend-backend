@@ -64,8 +64,8 @@ export class PayrollService {
         }
       }
 
-      // If it's a working day and not a paid holiday, increment workingDays count
-      if (isWorkingDay && !holidayDates.has(dateStr)) {
+      // Paid holidays are part of the total payable working days in the month
+      if (isWorkingDay) {
         workingDays++;
       }
     }
@@ -76,8 +76,12 @@ export class PayrollService {
   /**
    * Generates payroll for specified employees or all active employees for a given month and year.
    * Only run when owner requests payslip generation.
+   * @param {number} month
+   * @param {number} year
+   * @param {Array} employeeIds
+   * @param {'present'|'absent'} future_days_treatment
    */
-  static async generatePayroll(month, year, employeeIds = []) {
+  static async generatePayroll(month, year, employeeIds = [], future_days_treatment = 'present') {
     // 1 & 2. Fetch active deduction policies and targeted employees concurrently
     let userQuery = supabase
       .from('users')
@@ -346,9 +350,7 @@ export class PayrollService {
 
         if (isWorking) {
           employeeWorkingDates.add(dateStr);
-          if (!holidayDates.has(dateStr)) {
-            workingDays++;
-          }
+          workingDays++;
         }
       }
 
@@ -383,16 +385,7 @@ export class PayrollService {
       const sortedWorkingDates = Array.from(employeeWorkingDates).sort();
 
       for (const dateStr of sortedWorkingDates) {
-        // If future month, do not process any days
-        if (isFutureMonth) {
-          continue;
-        }
-
-        // In current month, do not evaluate future dates beyond today
-        if (isCurrentMonth && dateStr > todayStr) {
-          continue;
-        }
-
+        const isFutureDate = (isCurrentMonth && dateStr > todayStr) || isFutureMonth;
         const isToday = isCurrentMonth && dateStr === todayStr;
         const isHolidayDate = holidayDates.has(dateStr);
         const holidayObj = allHolidays.find((h) => h.date === dateStr);
@@ -447,6 +440,64 @@ export class PayrollService {
             });
             dayNetPay += shiftDailyRate;
             totalEarnedSalary += shiftDailyRate;
+            continue;
+          }
+
+          // Future working day case (evaluated based on owner selection)
+          if (isFutureDate) {
+            if (future_days_treatment === 'present') {
+              presentDays += shiftWeight;
+              totalEarnedSalary += shiftDailyRate;
+              dayNetPay += shiftDailyRate;
+              dayShifts.push({
+                schedule_id: shiftSchedule.id,
+                shift_name: shiftSchedule.name || 'Shift',
+                shift_time: shiftTimeStr,
+                has_break: !!shiftSchedule.has_break,
+                break_time: shiftSchedule.has_break ? `${(shiftSchedule.break_start_time || '').slice(0, 5)} - ${(shiftSchedule.break_end_time || '').slice(0, 5)}` : null,
+                working_hours: Number((shiftMinutes / 60).toFixed(1)),
+                base_pay: shiftDailyRate,
+                status: 'present',
+                is_projected: true,
+                clock_in: null,
+                clock_out: null,
+                late_minutes: 0,
+                is_manual: false,
+                deductions: [],
+                shift_net_pay: shiftDailyRate,
+              });
+            } else {
+              absentDays += shiftWeight;
+              const absentAmount = shiftDailyRate;
+              dayDeductions += absentAmount;
+              totalDeductions += absentAmount;
+              const dItem = {
+                date: dateStr,
+                type: 'absent',
+                is_projected: true,
+                reason: assignedShifts.length > 1 ? `Absent (${shiftSchedule.name}) • Future Day` : 'Absent • Future Day',
+                policy_name: assignedShifts.length > 1 ? `Full Day Absent (${shiftSchedule.name})` : 'Full Day Absent',
+                amount: absentAmount,
+              };
+              deductionBreakdown.push(dItem);
+              dayShifts.push({
+                schedule_id: shiftSchedule.id,
+                shift_name: shiftSchedule.name || 'Shift',
+                shift_time: shiftTimeStr,
+                has_break: !!shiftSchedule.has_break,
+                break_time: shiftSchedule.has_break ? `${(shiftSchedule.break_start_time || '').slice(0, 5)} - ${(shiftSchedule.break_end_time || '').slice(0, 5)}` : null,
+                working_hours: Number((shiftMinutes / 60).toFixed(1)),
+                base_pay: shiftDailyRate,
+                status: 'absent',
+                is_projected: true,
+                clock_in: null,
+                clock_out: null,
+                late_minutes: 0,
+                is_manual: false,
+                deductions: [dItem],
+                shift_net_pay: 0,
+              });
+            }
             continue;
           }
 
@@ -512,8 +563,17 @@ export class PayrollService {
               shift_net_pay: shiftNet,
             });
           } else {
-            // Present or Half Day
-            const isHalfDayRecord = record.status === 'half_day';
+            // Present or Half Day (either explicitly marked, or worked less than half the shift duration)
+            let isHalfDayRecord = record?.status === 'half_day';
+            if (!isHalfDayRecord && record?.clock_in_time && record?.clock_out_time && shiftMinutes > 0) {
+              const inDate = new Date(record.clock_in_time);
+              const outDate = new Date(record.clock_out_time);
+              const workedMins = Math.floor((outDate.getTime() - inDate.getTime()) / 60000);
+              if (workedMins < shiftMinutes / 2) {
+                isHalfDayRecord = true;
+              }
+            }
+
             let shiftEarned = shiftDailyRate;
 
             if (isHalfDayRecord) {
@@ -602,6 +662,10 @@ export class PayrollService {
               status: isHalfDayRecord ? 'half_day' : 'present',
               clock_in: record.clock_in_time || null,
               clock_out: record.clock_out_time || null,
+              lunch_start_time: record.lunch_start_time || null,
+              lunch_end_time: record.lunch_end_time || null,
+              lunch_duration_minutes: record.lunch_duration_minutes || null,
+              is_on_lunch: Boolean(record.lunch_start_time && !record.lunch_end_time),
               late_minutes: lateMins,
               is_manual: record.is_manual || false,
               deductions: shiftDeductionsList,
@@ -654,6 +718,22 @@ export class PayrollService {
       // Net salary = sum of all daily net pays minus advance salary deductions
       const netSalary = Math.max(0, Number((totalMonthNetFromDays - advanceDeductionTotal).toFixed(2)));
 
+      const autoSnapshot = {
+        gross_salary: grossSalary,
+        earned_salary: earnedSalary,
+        total_deduction_amount: totalDeductionsWithAdvance,
+        advance_deduction: Number(advanceDeductionTotal.toFixed(2)),
+        net_salary: netSalary,
+        working_days: workingDays,
+        present_days: Math.round(presentDays),
+        absent_days: Math.round(absentDays),
+        late_count: lateCount,
+        total_late_minutes: totalLateMinutes,
+        half_day_count: halfDayCount,
+        deduction_breakdown: deductionBreakdown,
+        daily_records: dailyRecords,
+      };
+
       payrollToUpsert.push({
         employee_id: employeeId,
         month,
@@ -672,6 +752,8 @@ export class PayrollService {
         earned_salary: earnedSalary,
         net_salary: netSalary,
         status: 'draft',
+        is_manually_edited: false,
+        auto_calculated_snapshot: autoSnapshot,
         generated_at: new Date().toISOString(),
       });
     }
@@ -725,6 +807,196 @@ export class PayrollService {
     }
 
     return payrollResults;
+  }
+
+  /**
+   * Allows owner to manually update amounts, attendance days, and line items on a draft payroll.
+   */
+  static async updateDraftPayroll(id, updates, userId) {
+    // 1. Fetch current payroll record
+    const { data: current, error: fetchErr } = await supabase
+      .from('payroll')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchErr || !current) {
+      throw { status: 404, code: 'NOT_FOUND', message: 'Payroll record not found' };
+    }
+
+    if (current.status === 'finalized') {
+      throw {
+        status: 400,
+        code: 'PAYROLL_ALREADY_FINALIZED',
+        message: 'Cannot edit finalized payroll. Only draft payroll can be edited.',
+      };
+    }
+
+    // Allowed updatable fields
+    const payload = {
+      is_manually_edited: true,
+      edited_by: userId,
+      edited_at: new Date().toISOString(),
+    };
+
+    if (updates.gross_salary !== undefined) payload.gross_salary = Number(updates.gross_salary);
+    if (updates.earned_salary !== undefined) payload.earned_salary = Number(updates.earned_salary);
+    if (updates.total_deduction_amount !== undefined)
+      payload.total_deduction_amount = Number(updates.total_deduction_amount);
+    if (updates.advance_deduction !== undefined) payload.advance_deduction = Number(updates.advance_deduction);
+    if (updates.net_salary !== undefined) payload.net_salary = Math.max(0, Number(updates.net_salary));
+    if (updates.working_days !== undefined) payload.working_days = Number(updates.working_days);
+    if (updates.present_days !== undefined) payload.present_days = Number(updates.present_days);
+    if (updates.absent_days !== undefined) payload.absent_days = Number(updates.absent_days);
+    if (updates.half_day_count !== undefined) payload.half_day_count = Number(updates.half_day_count);
+    if (updates.late_count !== undefined) payload.late_count = Number(updates.late_count);
+    if (updates.total_late_minutes !== undefined)
+      payload.total_late_minutes = Number(updates.total_late_minutes);
+    if (updates.deduction_breakdown !== undefined) payload.deduction_breakdown = updates.deduction_breakdown;
+    if (updates.daily_records !== undefined) payload.daily_records = updates.daily_records;
+    if (updates.admin_notes !== undefined && updates.admin_notes !== null && String(updates.admin_notes).trim() !== '') {
+      payload.admin_notes = String(updates.admin_notes).trim();
+    }
+
+    // Preserve original auto snapshot if not already present
+    if (!current.auto_calculated_snapshot) {
+      payload.auto_calculated_snapshot = {
+        gross_salary: current.gross_salary,
+        earned_salary: current.earned_salary,
+        total_deduction_amount: current.total_deduction_amount,
+        advance_deduction: current.advance_deduction,
+        net_salary: current.net_salary,
+        working_days: current.working_days,
+        present_days: current.present_days,
+        absent_days: current.absent_days,
+        late_count: current.late_count,
+        total_late_minutes: current.total_late_minutes,
+        half_day_count: current.half_day_count,
+        deduction_breakdown: current.deduction_breakdown,
+        daily_records: current.daily_records,
+      };
+    }
+
+    let { data: updated, error: updateErr } = await supabase
+      .from('payroll')
+      .update(payload)
+      .eq('id', id)
+      .select(`
+        *,
+        users!payroll_employee_id_fkey (
+          id,
+          name,
+          employee_profiles (
+            employee_code,
+            department
+          )
+        )
+      `)
+      .single();
+
+    if (updateErr && (updateErr.message?.includes('admin_notes') || updateErr.code === 'PGRST204')) {
+      delete payload.admin_notes;
+      const retryRes = await supabase
+        .from('payroll')
+        .update(payload)
+        .eq('id', id)
+        .select(`
+          *,
+          users!payroll_employee_id_fkey (
+            id,
+            name,
+            employee_profiles (
+              employee_code,
+              department
+            )
+          )
+        `)
+        .single();
+      updated = retryRes.data;
+      updateErr = retryRes.error;
+    }
+
+    if (updateErr) {
+      console.error('Error updating draft payroll:', updateErr);
+      throw { status: 500, code: 'DB_ERROR', message: updateErr.message };
+    }
+
+    return updated;
+  }
+
+  /**
+   * Reverts manual edits on a draft payroll back to the auto-calculated snapshot.
+   */
+  static async resetDraftPayroll(id) {
+    const { data: current, error: fetchErr } = await supabase
+      .from('payroll')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchErr || !current) {
+      throw { status: 404, code: 'NOT_FOUND', message: 'Payroll record not found' };
+    }
+
+    if (current.status === 'finalized') {
+      throw {
+        status: 400,
+        code: 'PAYROLL_ALREADY_FINALIZED',
+        message: 'Cannot reset finalized payroll.',
+      };
+    }
+
+    const snapshot = current.auto_calculated_snapshot;
+    if (!snapshot) {
+      throw {
+        status: 400,
+        code: 'NO_SNAPSHOT',
+        message: 'No auto-calculated snapshot found to restore.',
+      };
+    }
+
+    const payload = {
+      gross_salary: snapshot.gross_salary,
+      earned_salary: snapshot.earned_salary,
+      total_deduction_amount: snapshot.total_deduction_amount,
+      advance_deduction: snapshot.advance_deduction ?? 0,
+      net_salary: snapshot.net_salary,
+      working_days: snapshot.working_days,
+      present_days: snapshot.present_days,
+      absent_days: snapshot.absent_days,
+      late_count: snapshot.late_count,
+      total_late_minutes: snapshot.total_late_minutes,
+      half_day_count: snapshot.half_day_count,
+      deduction_breakdown: snapshot.deduction_breakdown,
+      daily_records: snapshot.daily_records,
+      is_manually_edited: false,
+      edited_by: null,
+      edited_at: null,
+    };
+
+    const { data: updated, error: updateErr } = await supabase
+      .from('payroll')
+      .update(payload)
+      .eq('id', id)
+      .select(`
+        *,
+        users!payroll_employee_id_fkey (
+          id,
+          name,
+          employee_profiles (
+            employee_code,
+            department
+          )
+        )
+      `)
+      .single();
+
+    if (updateErr) {
+      console.error('Error resetting draft payroll:', updateErr);
+      throw { status: 500, code: 'DB_ERROR', message: updateErr.message };
+    }
+
+    return updated;
   }
 }
 

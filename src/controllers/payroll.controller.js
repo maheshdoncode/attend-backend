@@ -122,7 +122,7 @@ export class PayrollController {
    */
   static async generate(req, res) {
     try {
-      const { month, year, employee_ids = [] } = req.body;
+      const { month, year, employee_ids = [], future_days_treatment = 'present' } = req.body;
 
       if (!month || !year) {
         return res.status(400).json({
@@ -147,7 +147,7 @@ export class PayrollController {
         });
       }
 
-      const results = await PayrollService.generatePayroll(monthNum, yearNum, employee_ids);
+      const results = await PayrollService.generatePayroll(monthNum, yearNum, employee_ids, future_days_treatment);
       const totalGross = results.reduce((acc, r) => acc + (Number(r.gross_salary) || 0), 0);
       const totalNet = results.reduce((acc, r) => acc + (Number(r.net_salary) || 0), 0);
       const totalEarned = results.reduce((acc, r) => acc + (Number(r.earned_salary) || 0), 0);
@@ -246,6 +246,15 @@ export class PayrollController {
           : user?.employee_profiles;
         const branchIds = (user?.branch_employee_assignments || []).map((b) => b.branch_id);
         const visibility = getPayrollVisibilityInfo(r);
+        const deductionBreakdown = Array.isArray(r.deduction_breakdown) ? r.deduction_breakdown : [];
+        let totalDeds = Number(r.total_deduction_amount ?? 0);
+        if (deductionBreakdown.length > 0) {
+          totalDeds = Number(deductionBreakdown.reduce((acc, d) => acc + (Number(d.amount) || 0), 0).toFixed(2));
+        }
+        let netSal = Number(r.net_salary ?? 0);
+        if (r.gross_salary !== undefined) {
+          netSal = Math.max(0, Number((Number(r.gross_salary) - totalDeds).toFixed(2)));
+        }
 
         return {
           id: r.id,
@@ -264,11 +273,13 @@ export class PayrollController {
           half_day_count: r.half_day_count,
           gross_salary: Number(r.gross_salary),
           earned_salary: Number(r.earned_salary || 0),
-          total_deduction_amount: Number(r.total_deduction_amount),
+          total_deduction_amount: totalDeds,
           advance_deduction: Number(r.advance_deduction || 0),
-          deduction_breakdown: r.deduction_breakdown,
-          net_salary: Number(r.net_salary),
+          deduction_breakdown: deductionBreakdown,
+          net_salary: netSal,
           status: r.status,
+          is_manually_edited: Boolean(r.is_manually_edited),
+          edited_at: r.edited_at || null,
           generated_at: r.generated_at,
           ...visibility,
         };
@@ -462,6 +473,11 @@ export class PayrollController {
         daily_records: record.daily_records || [],
         net_salary: netSalary,
         status: record.status,
+        is_manually_edited: Boolean(record.is_manually_edited),
+        edited_at: record.edited_at || null,
+        edited_by: record.edited_by || null,
+        admin_notes: record.admin_notes || null,
+        auto_calculated_snapshot: record.auto_calculated_snapshot || null,
         generated_at: record.generated_at,
         ...visibility,
       };
@@ -539,6 +555,67 @@ export class PayrollController {
       return res.status(500).json({
         success: false,
         error: { code: 'SERVER_ERROR', message: err.message },
+      });
+    }
+  }
+
+  /**
+   * PUT /api/hrm/payroll/:id
+   * Accessible by: owner
+   * Body: { gross_salary, earned_salary, total_deduction_amount, advance_deduction, net_salary, working_days, present_days, absent_days, half_day_count, late_count, total_late_minutes, deduction_breakdown, daily_records, admin_notes }
+   */
+  static async updateDraft(req, res) {
+    try {
+      const { id } = req.params;
+      const updated = await PayrollService.updateDraftPayroll(id, req.body, req.user.id);
+      const visibility = getPayrollVisibilityInfo(updated);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Draft payroll updated successfully',
+        payroll: {
+          ...updated,
+          ...visibility,
+        },
+      });
+    } catch (err) {
+      console.error('Update draft payroll error:', err);
+      return res.status(err.status || 500).json({
+        success: false,
+        error: {
+          code: err.code || 'SERVER_ERROR',
+          message: err.message || 'Failed to update draft payroll',
+        },
+      });
+    }
+  }
+
+  /**
+   * POST /api/hrm/payroll/:id/reset
+   * Accessible by: owner
+   */
+  static async resetDraft(req, res) {
+    try {
+      const { id } = req.params;
+      const restored = await PayrollService.resetDraftPayroll(id);
+      const visibility = getPayrollVisibilityInfo(restored);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Payroll figures successfully reset to original calculation',
+        payroll: {
+          ...restored,
+          ...visibility,
+        },
+      });
+    } catch (err) {
+      console.error('Reset draft payroll error:', err);
+      return res.status(err.status || 500).json({
+        success: false,
+        error: {
+          code: err.code || 'SERVER_ERROR',
+          message: err.message || 'Failed to reset draft payroll',
+        },
       });
     }
   }

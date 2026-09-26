@@ -1,9 +1,24 @@
 import { supabase } from '../db/supabase.js';
 import { AttendanceService } from '../services/attendance.service.js';
-import { parseTimeToMinutes } from '../utils/schedule.js';
+import { parseTimeToMinutes, computeLateMinutes } from '../utils/schedule.js';
 
 export const resolveEmployeeAttendanceStatus = (att, schedule, targetDate) => {
-  const explicitStatus = typeof att === 'string' ? att : att?.status;
+  let explicitStatus = typeof att === 'string' ? att : att?.status;
+
+  // Check if worked duration is less than half the shift -> automatically half_day
+  if (att && typeof att === 'object' && att.clock_in_time && att.clock_out_time && schedule?.start_time && schedule?.end_time) {
+    const inDate = new Date(att.clock_in_time);
+    const outDate = new Date(att.clock_out_time);
+    const workedMins = Math.floor((outDate.getTime() - inDate.getTime()) / 60000);
+    const startMins = parseTimeToMinutes(schedule.start_time);
+    let endMins = parseTimeToMinutes(schedule.end_time);
+    if (endMins <= startMins) endMins += 24 * 60;
+    const totalShiftMins = Math.max(60, endMins - startMins);
+    if (workedMins < totalShiftMins / 2) {
+      return 'half_day';
+    }
+  }
+
   if (explicitStatus && explicitStatus !== 'not_marked') {
     return explicitStatus;
   }
@@ -100,6 +115,54 @@ export class AttendanceController {
         error: {
           code: err.code || 'CLOCK_OUT_FAILED',
           message: err.message || 'Failed to clock out',
+        },
+      });
+    }
+  }
+
+  /**
+   * POST /api/hrm/attendance/lunch-start
+   * Accessible by: employee, branch_manager
+   */
+  static async startLunch(req, res) {
+    try {
+      const { latitude, longitude } = req.body || {};
+      const result = await AttendanceService.startLunch(req.user.id, {
+        latitude,
+        longitude,
+      });
+      return res.status(200).json(result);
+    } catch (err) {
+      const status = err.status || 500;
+      return res.status(status).json({
+        success: false,
+        error: {
+          code: err.code || 'START_LUNCH_FAILED',
+          message: err.message || 'Failed to start lunch break',
+        },
+      });
+    }
+  }
+
+  /**
+   * POST /api/hrm/attendance/lunch-end
+   * Accessible by: employee, branch_manager
+   */
+  static async endLunch(req, res) {
+    try {
+      const { latitude, longitude } = req.body || {};
+      const result = await AttendanceService.endLunch(req.user.id, {
+        latitude,
+        longitude,
+      });
+      return res.status(200).json(result);
+    } catch (err) {
+      const status = err.status || 500;
+      return res.status(status).json({
+        success: false,
+        error: {
+          code: err.code || 'END_LUNCH_FAILED',
+          message: err.message || 'Failed to end lunch break',
         },
       });
     }
@@ -236,6 +299,10 @@ export class AttendanceController {
           clock_out_time: r.clock_out_time,
           clock_out_lat: r.clock_out_lat,
           clock_out_lng: r.clock_out_lng,
+          lunch_start_time: r.lunch_start_time || null,
+          lunch_end_time: r.lunch_end_time || null,
+          lunch_duration_minutes: r.lunch_duration_minutes || null,
+          is_on_lunch: Boolean(r.lunch_start_time && !r.lunch_end_time),
           status: r.status,
           is_flagged: r.is_flagged,
           flag_reason: r.flag_reason,
@@ -277,12 +344,15 @@ export class AttendanceController {
           date,
           clock_in_time,
           clock_out_time,
+          lunch_start_time,
+          lunch_end_time,
+          lunch_duration_minutes,
           status,
           is_flagged,
           flag_reason,
           schedule_id,
           branches (name),
-          work_schedules (id, name, start_time, end_time)
+          work_schedules (id, name, start_time, end_time, has_break, break_start_time, break_end_time)
         `)
         .eq('employee_id', employeeId);
 
@@ -329,11 +399,18 @@ export class AttendanceController {
           branch_name: r.branches?.name || null,
           clock_in_time: r.clock_in_time,
           clock_out_time: r.clock_out_time,
+          lunch_start_time: r.lunch_start_time || null,
+          lunch_end_time: r.lunch_end_time || null,
+          lunch_duration_minutes: r.lunch_duration_minutes || null,
+          is_on_lunch: Boolean(r.lunch_start_time && !r.lunch_end_time),
           status: r.status,
           is_flagged: r.is_flagged,
           flag_reason: r.flag_reason,
           schedule_id: r.schedule_id || null,
           schedule_name: r.work_schedules?.name || null,
+          has_break: r.work_schedules?.has_break ?? false,
+          break_start_time: r.work_schedules?.break_start_time || null,
+          break_end_time: r.work_schedules?.break_end_time || null,
         };
       });
 
@@ -718,6 +795,29 @@ export class AttendanceController {
         const attStatus = resolveEmployeeAttendanceStatus(att, empSchedule, targetDate);
         const isPresent = ['present', 'late', 'half_day'].includes(attStatus);
 
+        let isFlagged = Boolean(att?.is_flagged);
+        let flagReason = att?.flag_reason || null;
+
+        if (!isFlagged && att?.clock_in_time && empSchedule?.start_time) {
+          const lateMins = computeLateMinutes(new Date(att.clock_in_time), empSchedule);
+          if (lateMins > 0 || attStatus === 'late') {
+            isFlagged = true;
+            flagReason = flagReason || `Late arrival (${lateMins} min late)`;
+          }
+        }
+
+        if (att?.clock_out_time && empSchedule?.end_time) {
+          const shiftEndMins = parseTimeToMinutes(empSchedule.end_time);
+          const outDate = new Date(att.clock_out_time);
+          const outMins = outDate.getHours() * 60 + outDate.getMinutes();
+          if (outMins < shiftEndMins - 15) {
+            const earlyMins = shiftEndMins - outMins;
+            const earlyText = `${earlyMins} min early departure`;
+            isFlagged = true;
+            flagReason = flagReason ? (flagReason.includes('early') ? flagReason : `${flagReason}, ${earlyText}`) : earlyText;
+          }
+        }
+
         return {
           id: emp.id,
           name: emp.name,
@@ -731,8 +831,12 @@ export class AttendanceController {
           attendance_id: att?.id || null,
           clock_in_time: att?.clock_in_time || null,
           clock_out_time: att?.clock_out_time || null,
-          is_flagged: att?.is_flagged || false,
-          flag_reason: att?.flag_reason || null,
+          lunch_start_time: att?.lunch_start_time || null,
+          lunch_end_time: att?.lunch_end_time || null,
+          lunch_duration_minutes: att?.lunch_duration_minutes || null,
+          is_on_lunch: Boolean(att?.lunch_start_time && !att?.lunch_end_time),
+          is_flagged: isFlagged,
+          flag_reason: flagReason,
           admin_notes: att?.admin_notes || null,
         };
       });
@@ -942,18 +1046,48 @@ export class AttendanceController {
 
           const attStatus = resolveEmployeeAttendanceStatus(att, sch, targetDate);
 
+          let isFlagged = Boolean(att?.is_flagged);
+          let flagReason = att?.flag_reason || null;
+
+          if (!isFlagged && att?.clock_in_time && sch?.start_time) {
+            const lateMins = computeLateMinutes(new Date(att.clock_in_time), sch);
+            if (lateMins > 0 || attStatus === 'late') {
+              isFlagged = true;
+              flagReason = flagReason || `Late arrival (${lateMins} min late)`;
+            }
+          }
+
+          if (att?.clock_out_time && sch?.end_time) {
+            const shiftEndMins = parseTimeToMinutes(sch.end_time);
+            const outDate = new Date(att.clock_out_time);
+            const outMins = outDate.getHours() * 60 + outDate.getMinutes();
+            if (outMins < shiftEndMins - 15) {
+              const earlyMins = shiftEndMins - outMins;
+              const earlyText = `${earlyMins} min early departure`;
+              isFlagged = true;
+              flagReason = flagReason ? (flagReason.includes('early') ? flagReason : `${flagReason}, ${earlyText}`) : earlyText;
+            }
+          }
+
           return {
             schedule_id: sch.id,
             schedule_name: sch.name || 'Day Shift',
             start_time: sch.start_time,
             end_time: sch.end_time,
+            has_break: sch.has_break ?? false,
+            break_start_time: sch.break_start_time || null,
+            break_end_time: sch.break_end_time || null,
             clock_in_time: att?.clock_in_time || null,
             clock_out_time: att?.clock_out_time || null,
+            lunch_start_time: att?.lunch_start_time || null,
+            lunch_end_time: att?.lunch_end_time || null,
+            lunch_duration_minutes: att?.lunch_duration_minutes || null,
+            is_on_lunch: Boolean(att?.lunch_start_time && !att?.lunch_end_time),
             status: attStatus,
             attendance_status: attStatus,
             attendance_id: att?.id || null,
-            is_flagged: att?.is_flagged || false,
-            flag_reason: att?.flag_reason || null,
+            is_flagged: isFlagged,
+            flag_reason: flagReason,
             admin_notes: att?.admin_notes || null,
           };
         });
@@ -997,6 +1131,10 @@ export class AttendanceController {
           attendance_id: primaryShift.attendance_id || null,
           clock_in_time: primaryShift.clock_in_time || null,
           clock_out_time: primaryShift.clock_out_time || null,
+          lunch_start_time: primaryShift.lunch_start_time || null,
+          lunch_end_time: primaryShift.lunch_end_time || null,
+          lunch_duration_minutes: primaryShift.lunch_duration_minutes || null,
+          is_on_lunch: primaryShift.is_on_lunch || false,
           is_flagged: isFlagged,
           flag_reason: flaggedShift?.flag_reason || primaryShift.flag_reason || null,
           admin_notes: primaryShift.admin_notes || null,
@@ -1004,10 +1142,14 @@ export class AttendanceController {
         };
       });
 
+      const flaggedCount = roster.filter((e) => e.is_flagged).length;
+
       // 4. Filter by status if requested
       if (status && status !== 'all') {
         if (status === 'present') {
           roster = roster.filter((e) => e.is_present);
+        } else if (status === 'flagged') {
+          roster = roster.filter((e) => e.is_flagged);
         } else {
           roster = roster.filter((e) => e.attendance_status === status || e.status === status);
         }
@@ -1024,6 +1166,7 @@ export class AttendanceController {
           half_day: halfDayCount,
           absent: absentCount,
           not_marked: notMarkedCount,
+          flagged: flaggedCount,
         },
         records: roster,
         employees: roster,

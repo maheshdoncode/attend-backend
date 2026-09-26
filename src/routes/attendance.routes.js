@@ -16,6 +16,8 @@ router.use(branchScope);
 // Employee actions
 router.post('/clock-in', requireRole('employee', 'branch_manager'), AttendanceController.clockIn);
 router.post('/clock-out', requireRole('employee', 'branch_manager'), AttendanceController.clockOut);
+router.post('/lunch-start', requireRole('employee', 'branch_manager'), AttendanceController.startLunch);
+router.post('/lunch-end', requireRole('employee', 'branch_manager'), AttendanceController.endLunch);
 router.get('/my', requireRole('employee', 'branch_manager'), AttendanceController.myAttendance);
 
 // Manager / Owner actions

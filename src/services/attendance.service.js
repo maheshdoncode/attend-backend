@@ -293,12 +293,53 @@ export class AttendanceService {
       throw { status: 400, code: 'NO_ACTIVE_CLOCK_IN', message: 'No active clock-in found for today' };
     }
 
-    // 6. Update record with clock-out time
+    // 6. Update record with clock-out time while preserving existing flags (e.g. Late Arrival) and detecting early departure
     const clockInDate = new Date(attendance.clock_in_time);
     const hoursWorked = Math.max(
       0,
       Number(((now.getTime() - clockInDate.getTime()) / (1000 * 60 * 60)).toFixed(2))
     );
+
+    let isFlagged = Boolean(attendance.is_flagged);
+    let flagReason = attendance.flag_reason || null;
+
+    let finalStatus = attendance.status || 'present';
+
+    // Check early departure & half-day if shift schedule is present
+    if (attendance.schedule_id) {
+      try {
+        const { data: schedule } = await supabase
+          .from('work_schedules')
+          .select('*')
+          .eq('id', attendance.schedule_id)
+          .maybeSingle();
+
+        if (schedule && schedule.start_time && schedule.end_time) {
+          const shiftStartMins = parseTimeToMinutes(schedule.start_time);
+          let shiftEndMins = parseTimeToMinutes(schedule.end_time);
+          if (shiftEndMins <= shiftStartMins) shiftEndMins += 24 * 60;
+          const totalShiftMins = Math.max(60, shiftEndMins - shiftStartMins);
+          const workedMins = Math.floor((now.getTime() - clockInDate.getTime()) / 60000);
+
+          if (workedMins < totalShiftMins / 2) {
+            finalStatus = 'half_day';
+            const halfDayReason = `Half Day (${Math.floor(workedMins / 60)}h ${workedMins % 60}m worked of ${Math.floor(totalShiftMins / 60)}h shift)`;
+            isFlagged = true;
+            flagReason = flagReason ? `${flagReason}, ${halfDayReason}` : halfDayReason;
+          } else {
+            const currentMins = now.getHours() * 60 + now.getMinutes();
+            if (currentMins < shiftEndMins - 15) {
+              const earlyMins = shiftEndMins - currentMins;
+              const earlyReason = `${earlyMins} min early departure`;
+              isFlagged = true;
+              flagReason = flagReason ? `${flagReason}, ${earlyReason}` : earlyReason;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Error checking early departure / half day:', e.message);
+      }
+    }
 
     const { data: updated, error: updateError } = await supabase
       .from('attendance')
@@ -306,8 +347,9 @@ export class AttendanceService {
         clock_out_time: now.toISOString(),
         clock_out_lat: Number(latitude),
         clock_out_lng: Number(longitude),
-        is_flagged: false,
-        flag_reason: null,
+        status: finalStatus,
+        is_flagged: isFlagged,
+        flag_reason: flagReason,
       })
       .eq('id', attendance.id)
       .select()
@@ -665,6 +707,131 @@ export class AttendanceService {
       if (error) throw { status: 500, code: 'DB_ERROR', message: error.message };
       return { success: true, message: 'Clocked out manually', record: data };
     }
+  }
+
+  /**
+   * Process employee lunch start (break start)
+   */
+  static async startLunch(employeeId, { latitude, longitude }) {
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+
+    // 1. Find today's active attendance session
+    const { data: attendance, error } = await supabase
+      .from('attendance')
+      .select('*')
+      .eq('employee_id', employeeId)
+      .eq('date', today)
+      .is('clock_out_time', null)
+      .maybeSingle();
+
+    if (error || !attendance || !attendance.clock_in_time) {
+      throw {
+        status: 400,
+        code: 'NO_ACTIVE_CLOCK_IN',
+        message: 'You must be clocked into a shift to start lunch break',
+      };
+    }
+
+    if (attendance.lunch_start_time && !attendance.lunch_end_time) {
+      throw {
+        status: 409,
+        code: 'ALREADY_ON_LUNCH',
+        message: 'You are already on lunch break',
+      };
+    }
+
+    if (attendance.lunch_start_time && attendance.lunch_end_time) {
+      throw {
+        status: 409,
+        code: 'LUNCH_ALREADY_COMPLETED',
+        message: 'You have already completed your lunch break for this shift',
+      };
+    }
+
+    // 2. Update attendance record with lunch_start_time
+    const { data: updated, error: updateErr } = await supabase
+      .from('attendance')
+      .update({
+        lunch_start_time: now.toISOString(),
+        lunch_start_lat: latitude !== undefined ? Number(latitude) : null,
+        lunch_start_lng: longitude !== undefined ? Number(longitude) : null,
+      })
+      .eq('id', attendance.id)
+      .select()
+      .single();
+
+    if (updateErr) {
+      throw { status: 500, code: 'DB_ERROR', message: updateErr.message };
+    }
+
+    return {
+      success: true,
+      attendance_id: updated.id,
+      lunch_start_time: updated.lunch_start_time,
+      status: 'on_lunch',
+      message: 'Lunch break started',
+    };
+  }
+
+  /**
+   * Process employee lunch end (return to work)
+   */
+  static async endLunch(employeeId, { latitude, longitude }) {
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+
+    // 1. Find today's active attendance session where lunch_start_time is set but lunch_end_time is null
+    const { data: attendance, error } = await supabase
+      .from('attendance')
+      .select('*')
+      .eq('employee_id', employeeId)
+      .eq('date', today)
+      .is('clock_out_time', null)
+      .not('lunch_start_time', 'is', null)
+      .is('lunch_end_time', null)
+      .maybeSingle();
+
+    if (error || !attendance) {
+      throw {
+        status: 400,
+        code: 'NOT_ON_LUNCH',
+        message: 'No active lunch break found to end',
+      };
+    }
+
+    const startTime = new Date(attendance.lunch_start_time);
+    const durationMinutes = Math.max(
+      0,
+      Math.round((now.getTime() - startTime.getTime()) / (1000 * 60))
+    );
+
+    // 2. Update attendance record with lunch_end_time and duration
+    const { data: updated, error: updateErr } = await supabase
+      .from('attendance')
+      .update({
+        lunch_end_time: now.toISOString(),
+        lunch_end_lat: latitude !== undefined ? Number(latitude) : null,
+        lunch_end_lng: longitude !== undefined ? Number(longitude) : null,
+        lunch_duration_minutes: durationMinutes,
+      })
+      .eq('id', attendance.id)
+      .select()
+      .single();
+
+    if (updateErr) {
+      throw { status: 500, code: 'DB_ERROR', message: updateErr.message };
+    }
+
+    return {
+      success: true,
+      attendance_id: updated.id,
+      lunch_start_time: updated.lunch_start_time,
+      lunch_end_time: updated.lunch_end_time,
+      lunch_duration_minutes: durationMinutes,
+      status: 'present',
+      message: 'Lunch break ended. Welcome back to work!',
+    };
   }
 }
 

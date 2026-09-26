@@ -17,5 +17,7 @@ router.put('/bulk-visibility', requireRole('owner'), PayrollController.updateBul
 router.get('/:employee_id/:month/:year', requireRole('owner', 'branch_manager', 'employee'), PayrollController.getDetail);
 router.put('/:id/finalize', requireRole('owner'), PayrollController.finalize);
 router.put('/:id/visibility', requireRole('owner'), PayrollController.updateVisibility);
+router.put('/:id', requireRole('owner'), PayrollController.updateDraft);
+router.post('/:id/reset', requireRole('owner'), PayrollController.resetDraft);
 
 export default router;

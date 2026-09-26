@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { supabase } from '../db/supabase.js';
 import { getEmployeeSchedule, getEmployeeSchedules } from '../utils/schedule.js';
 import { encryptCredential } from '../utils/crypto.js';
+import { resolveLunchTrackingEnabled } from '../utils/lunchTracking.js';
 
 export class AuthController {
   /**
@@ -180,10 +181,18 @@ export class AuthController {
         }
       }
 
+      const isLunchTrackingEnabled = await resolveLunchTrackingEnabled({
+        userLunchMode: user.lunch_tracking_mode,
+        branchId: branches?.[0]?.id,
+        branchLunchMode: branches?.[0]?.lunch_tracking_mode,
+      });
+
       return res.status(200).json({
         success: true,
         user: {
           ...user,
+          lunch_tracking_mode: user.lunch_tracking_mode || 'inherit',
+          is_lunch_tracking_enabled: isLunchTrackingEnabled,
           profile,
           branches,
           schedule,

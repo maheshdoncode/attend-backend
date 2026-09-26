@@ -97,7 +97,9 @@
         "name": "Headquarters",
         "address": "123 Tech Park, Surat"
       }
-    ]
+    ],
+    "lunch_tracking_mode": "inherit",
+    "is_lunch_tracking_enabled": true
   }
 }
 ```
@@ -230,6 +232,7 @@
 | `employee_code` | string | — | Custom employee code (auto-generated if omitted) |
 | `branch_ids` | array[string] | — | List of branch UUIDs to assign |
 | `shift_assignments` | array[object] | — | List of `{ schedule_id, salary }` objects |
+| `lunch_tracking_mode` | string | — | `'inherit'` (default), `'enabled'`, or `'disabled'` |
 
 ### Response
 
@@ -243,6 +246,7 @@
     "email": "alex@company.com",
     "role": "employee",
     "is_active": true,
+    "lunch_tracking_mode": "inherit",
     "created_at": "2026-09-17T12:00:00.000Z",
     "profile": {
       "id": "d1e2f3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6a",
@@ -398,6 +402,7 @@
 | `employee_code` | string | — | Unique employee code |
 | `branch_ids` | array[string] | — | New list of assigned branch UUIDs |
 | `schedule_id` | string \| null | — | Specific schedule ID to override (or `null` to clear) |
+| `lunch_tracking_mode` | string | — | `'inherit'`, `'enabled'`, or `'disabled'` |
 | `is_active` | boolean | — | Active status |
 
 ### Response
@@ -635,6 +640,7 @@
 | `longitude` | number | ✅ | GPS Longitude |
 | `radius_meters` | number | — | Allowed geofence radius in meters (default: `100`) |
 | `qr_type` | string | — | `'static'` or `'dynamic'` (default: `'static'`) |
+| `lunch_tracking_mode` | string | — | `'inherit'` (default), `'enabled'`, or `'disabled'` |
 
 ### Response
 
@@ -651,6 +657,7 @@
     "radius_meters": 150,
     "qr_secret": "e1f9c34d852a4e98b0f7193c72bca531",
     "qr_type": "dynamic",
+    "lunch_tracking_mode": "inherit",
     "is_active": true,
     "created_at": "2026-09-17T12:00:00.000Z"
   }
@@ -740,6 +747,7 @@
 | `longitude` | number | — | GPS Longitude |
 | `radius_meters` | number | — | Geofence radius |
 | `qr_type` | string | — | `'static'` or `'dynamic'` |
+| `lunch_tracking_mode` | string | — | `'inherit'`, `'enabled'`, or `'disabled'` |
 | `is_active` | boolean | — | Active status |
 
 ### Response
@@ -910,10 +918,85 @@
 
 ---
 
+## POST /api/hrm/attendance/lunch-start
+
+**Auth:** Authenticated (`employee`, `branch_manager`)  
+**Description:** Starts the employee's lunch break for today's active shift. Records `lunch_start_time` and optional GPS coordinates. Break tracking does not affect salary calculations.
+
+### Request
+
+**Body**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `latitude` | number | No | Device GPS Latitude at lunch start |
+| `longitude` | number | No | Device GPS Longitude at lunch start |
+
+### Response
+
+**Success — `200 OK`**
+```json
+{
+  "success": true,
+  "message": "Lunch break started",
+  "data": {
+    "id": "7c1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+    "lunch_start_time": "2026-09-17T13:00:00.000Z",
+    "is_on_lunch": true
+  }
+}
+```
+
+**Errors**
+| Code | Reason |
+|------|--------|
+| `400` | No active clock-in found for today (`NO_ACTIVE_ATTENDANCE`) |
+| `400` | Lunch break already started today (`LUNCH_ALREADY_STARTED`) |
+
+---
+
+## POST /api/hrm/attendance/lunch-end
+
+**Auth:** Authenticated (`employee`, `branch_manager`)  
+**Description:** Ends the employee's active lunch break. Records `lunch_end_time` and calculates total `lunch_duration_minutes`.
+
+### Request
+
+**Body**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `latitude` | number | No | Device GPS Latitude at lunch end |
+| `longitude` | number | No | Device GPS Longitude at lunch end |
+
+### Response
+
+**Success — `200 OK`**
+```json
+{
+  "success": true,
+  "message": "Lunch break ended",
+  "data": {
+    "id": "7c1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+    "lunch_start_time": "2026-09-17T13:00:00.000Z",
+    "lunch_end_time": "2026-09-17T13:45:00.000Z",
+    "lunch_duration_minutes": 45,
+    "is_on_lunch": false
+  }
+}
+```
+
+**Errors**
+| Code | Reason |
+|------|--------|
+| `400` | No active clock-in found for today (`NO_ACTIVE_ATTENDANCE`) |
+| `400` | Lunch break has not been started yet (`LUNCH_NOT_STARTED`) |
+| `400` | Lunch break already ended (`LUNCH_ALREADY_ENDED`) |
+
+---
+
 ## GET /api/hrm/attendance
 
 **Auth:** Authenticated (`owner`, `branch_manager`)  
-**Description:** Lists attendance records with employee names, codes, branch names, and flag status. Branch managers are restricted to their assigned branches.
+**Description:** Lists attendance records with employee names, codes, branch names, flag status, and lunch break durations. Branch managers are restricted to their assigned branches.
 
 ### Request
 
@@ -951,6 +1034,10 @@
       "date": "2026-09-17",
       "clock_in_time": "2026-09-17T09:04:15.123Z",
       "clock_out_time": "2026-09-17T18:05:22.456Z",
+      "lunch_start_time": "2026-09-17T13:00:00.000Z",
+      "lunch_end_time": "2026-09-17T13:45:00.000Z",
+      "lunch_duration_minutes": 45,
+      "is_on_lunch": false,
       "status": "present",
       "is_flagged": false,
       "flag_reason": null,
@@ -1915,6 +2002,92 @@
 
 ---
 
+## PUT /api/hrm/payroll/:id
+
+**Auth:** Authenticated (`owner` ONLY)  
+**Description:** Allows the owner to manually modify amounts, attendance day counts, and deduction line items for a draft payroll before finalizing it.
+
+### Request
+
+**URL Params**
+| Param | Type | Description |
+|-------|------|-------------|
+| `id` | string | Payroll Record UUID |
+
+**Body**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `gross_salary` | number | — | Modified gross salary base |
+| `earned_salary` | number | — | Modified earned salary for working days |
+| `total_deduction_amount` | number | — | Total deductions amount |
+| `advance_deduction` | number | — | Advance salary deduction component |
+| `net_salary` | number | — | Final net payable salary |
+| `working_days` | number | — | Total working days in month |
+| `present_days` | number | — | Present days count |
+| `absent_days` | number | — | Absent days count |
+| `half_day_count` | number | — | Half days count |
+| `late_count` | number | — | Late arrivals count |
+| `total_late_minutes` | number | — | Total late minutes |
+| `deduction_breakdown` | array[object] | — | Line-item list of deductions/bonuses (`{ date, type, reason, amount }`) |
+| `admin_notes` | string | — | Audit explanation notes |
+
+### Response
+
+**Success — `200 OK`**
+```json
+{
+  "success": true,
+  "message": "Draft payroll updated successfully",
+  "payroll": {
+    "id": "6c1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+    "gross_salary": 45000.00,
+    "earned_salary": 42500.00,
+    "total_deduction_amount": 2500.00,
+    "net_salary": 40000.00,
+    "status": "draft",
+    "is_manually_edited": true,
+    "edited_at": "2026-09-26T10:35:00.000Z"
+  }
+}
+```
+
+**Errors**
+| Code | Reason |
+|------|--------|
+| `400` | Attempted editing a finalized payroll (`PAYROLL_ALREADY_FINALIZED`) |
+| `404` | Payroll record not found |
+
+---
+
+## POST /api/hrm/payroll/:id/reset
+
+**Auth:** Authenticated (`owner` ONLY)  
+**Description:** Restores the original attendance-calculated figures snapshot for a draft payroll, discarding all manual edits.
+
+### Request
+
+**URL Params**
+| Param | Type | Description |
+|-------|------|-------------|
+| `id` | string | Payroll Record UUID |
+
+### Response
+
+**Success — `200 OK`**
+```json
+{
+  "success": true,
+  "message": "Payroll figures successfully reset to original calculation",
+  "payroll": {
+    "id": "6c1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+    "status": "draft",
+    "is_manually_edited": false
+  }
+}
+```
+
+---
+
 ## PUT /api/hrm/payroll/bulk-visibility
 
 **Auth:** Authenticated (`owner`)  
@@ -2612,5 +2785,52 @@
   "message": "Release record deleted successfully"
 }
 ```
+
+---
+
+## GET /api/hrm/organization/settings/lunch-tracking
+
+**Auth:** Authenticated (`owner`, `branch_manager`)  
+**Description:** Retrieves the global organization-wide lunch break tracking setting.
+
+### Response
+
+**Success — `200 OK`**
+```json
+{
+  "success": true,
+  "data": {
+    "enabled": true
+  }
+}
+```
+
+---
+
+## PUT /api/hrm/organization/settings/lunch-tracking
+
+**Auth:** Authenticated (`owner` ONLY)  
+**Description:** Updates the global organization-wide lunch break tracking default setting.
+
+### Request
+
+**Body**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | boolean | ✅ | `true` to enable lunch break tracking globally by default, `false` to disable |
+
+### Response
+
+**Success — `200 OK`**
+```json
+{
+  "success": true,
+  "message": "Global lunch tracking settings updated successfully",
+  "data": {
+    "enabled": true
+  }
+}
+```
+
 
 

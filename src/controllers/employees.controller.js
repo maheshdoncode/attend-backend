@@ -72,6 +72,7 @@ export class EmployeesController {
         phone_number,
         mobile,
         phone,
+        lunch_tracking_mode = 'inherit',
         branch_ids = [],
         shift_assignments = [],
       } = req.body;
@@ -136,6 +137,7 @@ export class EmployeesController {
         password_hash,
         current_password: encryptedPassword,
         role,
+        lunch_tracking_mode: lunch_tracking_mode || 'inherit',
         is_active: true,
       };
 
@@ -522,6 +524,7 @@ export class EmployeesController {
           name: u.name,
           email: u.email,
           role: u.role,
+          lunch_tracking_mode: u.lunch_tracking_mode || 'inherit',
           is_active: u.is_active,
           employee_code: profile?.employee_code || null,
           department: profile?.department || null,
@@ -658,6 +661,7 @@ export class EmployeesController {
         name: user.name,
         email: user.email,
         role: user.role,
+        lunch_tracking_mode: user.lunch_tracking_mode || 'inherit',
         is_active: user.is_active,
         created_at: user.created_at,
         profile,
@@ -902,6 +906,7 @@ export class EmployeesController {
         phone_number,
         mobile,
         phone,
+        lunch_tracking_mode,
         is_active,
       } = req.body;
 
@@ -924,6 +929,7 @@ export class EmployeesController {
       // 2. Update users table if name provided, or is_active provided by owner
       const userUpdates = {};
       if (name !== undefined) userUpdates.name = name;
+      if (lunch_tracking_mode !== undefined) userUpdates.lunch_tracking_mode = lunch_tracking_mode;
       if (is_active !== undefined && req.user.role === 'owner') {
         userUpdates.is_active = Boolean(is_active);
       }
