@@ -1161,12 +1161,38 @@ export class AttendanceController {
         };
       });
 
+      const uniquePresentCount = roster.filter((e) => e.is_present).length;
       const flaggedCount = roster.filter((e) => e.is_flagged).length;
+
+      const summaryPayload = {
+        total: employees.length,
+        total_employees: employees.length,
+        present: uniquePresentCount,
+        total_present: uniquePresentCount,
+        on_time: presentCount,
+        late: lateCount,
+        half_day: halfDayCount,
+        absent: absentCount,
+        not_marked: notMarkedCount,
+        flagged: flaggedCount,
+      };
 
       // 4. Filter by status if requested
       if (status && status !== 'all') {
         if (status === 'present') {
           roster = roster.filter((e) => e.is_present);
+        } else if (status === 'late') {
+          roster = roster.filter(
+            (e) => e.is_late || e.status === 'late' || e.status === 'half_day_late'
+          );
+        } else if (status === 'half_day') {
+          roster = roster.filter(
+            (e) => e.is_half_day || e.status === 'half_day' || e.status === 'half_day_late'
+          );
+        } else if (status === 'absent') {
+          roster = roster.filter((e) => e.status === 'absent');
+        } else if (status === 'not_marked') {
+          roster = roster.filter((e) => e.status === 'not_marked');
         } else if (status === 'flagged') {
           roster = roster.filter((e) => e.is_flagged);
         } else {
@@ -1174,23 +1200,10 @@ export class AttendanceController {
         }
       }
 
-      const totalPresentCount = presentCount + lateCount + halfDayCount;
-
       return res.status(200).json({
         success: true,
         date: targetDate,
-        summary: {
-          total: employees.length,
-          total_employees: employees.length,
-          present: totalPresentCount,
-          total_present: totalPresentCount,
-          on_time: presentCount,
-          late: lateCount,
-          half_day: halfDayCount,
-          absent: absentCount,
-          not_marked: notMarkedCount,
-          flagged: flaggedCount,
-        },
+        summary: summaryPayload,
         records: roster,
         employees: roster,
       });
