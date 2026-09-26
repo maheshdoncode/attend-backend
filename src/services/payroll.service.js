@@ -355,7 +355,7 @@ export class PayrollService {
       }
 
       if (workingDays === 0) workingDays = 26;
-      const perDaySalary = monthlySalary / workingDays;
+      const perDaySalary = workingDays > 0 ? Math.round(monthlySalary / workingDays) : 0;
 
       const now = new Date();
       const currentMonthStr = String(now.getUTCMonth() + 1);
@@ -398,7 +398,7 @@ export class PayrollService {
         for (const shiftItem of assignedShifts) {
           const shiftSchedule = shiftItem.schedule;
           const shiftSalary = shiftItem.salary;
-          const shiftDailyRate = workingDays > 0 ? Number((shiftSalary / workingDays).toFixed(2)) : 0;
+          const shiftDailyRate = workingDays > 0 ? Math.round(shiftSalary / workingDays) : 0;
           let grossShiftMinutes = parseTimeToMinutes(shiftSchedule.end_time) - parseTimeToMinutes(shiftSchedule.start_time);
           if (grossShiftMinutes <= 0) grossShiftMinutes += 1440;
 
@@ -512,16 +512,67 @@ export class PayrollService {
             }
           }
 
-          // If it is today and no punch yet, check if shift has ended
-          if (isToday && !record) {
-            const shiftStartMins = parseTimeToMinutes(shiftSchedule.start_time);
-            let shiftEndMins = parseTimeToMinutes(shiftSchedule.end_time);
-            if (shiftEndMins <= shiftStartMins) shiftEndMins += 1440;
-
-            if (currentIstMins < shiftEndMins) {
-              // Shift is ongoing or upcoming today; skip without penalty
-              continue;
+          // If it is today and no punch yet (or marked absent):
+          // Treat based on owner's chosen future_days_treatment setting!
+          if (isToday && (!record || record.status === 'absent')) {
+            if (future_days_treatment === 'present') {
+              presentDays += shiftWeight;
+              totalEarnedSalary += shiftDailyRate;
+              dayNetPay += shiftDailyRate;
+              dayShifts.push({
+                schedule_id: shiftSchedule.id,
+                shift_name: shiftSchedule.name || 'Shift',
+                shift_time: shiftTimeStr,
+                has_break: !!shiftSchedule.has_break,
+                break_time: shiftSchedule.has_break
+                  ? `${(shiftSchedule.break_start_time || '').slice(0, 5)} - ${(shiftSchedule.break_end_time || '').slice(0, 5)}`
+                  : null,
+                working_hours: Number((shiftMinutes / 60).toFixed(1)),
+                base_pay: shiftDailyRate,
+                status: 'present',
+                is_projected: true,
+                clock_in: null,
+                clock_out: null,
+                late_minutes: 0,
+                is_manual: false,
+                deductions: [],
+                shift_net_pay: shiftDailyRate,
+              });
+            } else {
+              absentDays += shiftWeight;
+              const absentAmount = shiftDailyRate;
+              dayDeductions += absentAmount;
+              totalDeductions += absentAmount;
+              const dItem = {
+                date: dateStr,
+                type: 'absent',
+                is_projected: true,
+                reason: assignedShifts.length > 1 ? `Absent (${shiftSchedule.name}) • Today` : 'Absent • Today',
+                policy_name: assignedShifts.length > 1 ? `Full Day Absent (${shiftSchedule.name})` : 'Full Day Absent',
+                amount: absentAmount,
+              };
+              deductionBreakdown.push(dItem);
+              dayShifts.push({
+                schedule_id: shiftSchedule.id,
+                shift_name: shiftSchedule.name || 'Shift',
+                shift_time: shiftTimeStr,
+                has_break: !!shiftSchedule.has_break,
+                break_time: shiftSchedule.has_break
+                  ? `${(shiftSchedule.break_start_time || '').slice(0, 5)} - ${(shiftSchedule.break_end_time || '').slice(0, 5)}`
+                  : null,
+                working_hours: Number((shiftMinutes / 60).toFixed(1)),
+                base_pay: shiftDailyRate,
+                status: 'absent',
+                is_projected: true,
+                clock_in: null,
+                clock_out: null,
+                late_minutes: 0,
+                is_manual: false,
+                deductions: [dItem],
+                shift_net_pay: 0,
+              });
             }
+            continue;
           }
 
           const shiftDeductionsList = [];
@@ -580,8 +631,8 @@ export class PayrollService {
               halfDayCount++;
               presentDays += shiftWeight * 0.5;
               absentDays += shiftWeight * 0.5;
-              const halfDayDeduction = Number((shiftDailyRate / 2).toFixed(2));
-              shiftEarned = shiftDailyRate / 2;
+              const halfDayDeduction = Math.round(shiftDailyRate / 2);
+              shiftEarned = Math.max(0, shiftDailyRate - halfDayDeduction);
               totalEarnedSalary += shiftEarned;
 
               if (halfDayDeduction > 0) {
@@ -624,17 +675,17 @@ export class PayrollService {
               let lateDeduction = 0;
               if (matchedLatePolicy.deduction_type === 'fixed_minutes') {
                 const deductionMins = matchedLatePolicy.deduction_minutes || 30;
-                lateDeduction = (deductionMins / shiftMinutes) * shiftDailyRate;
+                lateDeduction = Math.round((deductionMins / shiftMinutes) * shiftDailyRate);
               } else if (matchedLatePolicy.deduction_type === 'half_day') {
                 if (!isHalfDayRecord) {
-                  lateDeduction = shiftDailyRate / 2;
+                  lateDeduction = Math.round(shiftDailyRate / 2);
                 }
               } else if (matchedLatePolicy.deduction_type === 'full_day') {
                 lateDeduction = Math.max(0, shiftDailyRate - shiftDeductionSum);
               }
 
               if (lateDeduction > 0) {
-                const lateAmount = Number(lateDeduction.toFixed(2));
+                const lateAmount = lateDeduction;
                 shiftDeductionSum += lateAmount;
                 totalDeductions += lateAmount;
                 const dItem = {
@@ -649,7 +700,7 @@ export class PayrollService {
               }
             }
 
-            shiftNet = Math.max(0, Number((shiftDailyRate - shiftDeductionSum).toFixed(2)));
+            shiftNet = Math.max(0, Math.round(shiftDailyRate - shiftDeductionSum));
 
             dayShifts.push({
               schedule_id: shiftSchedule.id,
@@ -686,9 +737,9 @@ export class PayrollService {
             date: dateStr,
             is_holiday: isHolidayDate,
             holiday_name: holidayObj?.name || null,
-            day_base_pay: Number(dayBasePay.toFixed(2)),
-            day_deductions: Number(dayDeductions.toFixed(2)),
-            day_net_pay: Number(dayNetPay.toFixed(2)),
+            day_base_pay: Math.round(dayBasePay),
+            day_deductions: Math.round(dayDeductions),
+            day_net_pay: Math.round(dayNetPay),
             shifts: dayShifts,
           });
           totalMonthNetFromDays += dayNetPay;
@@ -699,7 +750,7 @@ export class PayrollService {
       const empAdvances = empAdvancesMap.get(employeeId) || [];
       let advanceDeductionTotal = 0;
       empAdvances.forEach((adv) => {
-        const advAmount = Number(adv.amount || 0);
+        const advAmount = Math.round(Number(adv.amount || 0));
         advanceDeductionTotal += advAmount;
         const advDate = adv.created_at ? adv.created_at.split('T')[0] : `${year}-${String(month).padStart(2, '0')}-01`;
         deductionBreakdown.push({
@@ -712,17 +763,17 @@ export class PayrollService {
         });
       });
 
-      const grossSalary = Number(monthlySalary.toFixed(2));
-      const earnedSalary = Number(totalEarnedSalary.toFixed(2));
-      const totalDeductionsWithAdvance = Number((totalDeductions + advanceDeductionTotal).toFixed(2));
+      const grossSalary = Math.round(monthlySalary);
+      const earnedSalary = Math.round(totalEarnedSalary);
+      const totalDeductionsWithAdvance = Math.round(totalDeductions + advanceDeductionTotal);
       // Net salary = sum of all daily net pays minus advance salary deductions
-      const netSalary = Math.max(0, Number((totalMonthNetFromDays - advanceDeductionTotal).toFixed(2)));
+      const netSalary = Math.max(0, Math.round(totalMonthNetFromDays - advanceDeductionTotal));
 
       const autoSnapshot = {
         gross_salary: grossSalary,
         earned_salary: earnedSalary,
         total_deduction_amount: totalDeductionsWithAdvance,
-        advance_deduction: Number(advanceDeductionTotal.toFixed(2)),
+        advance_deduction: Math.round(advanceDeductionTotal),
         net_salary: netSalary,
         working_days: workingDays,
         present_days: Math.round(presentDays),
@@ -745,7 +796,7 @@ export class PayrollService {
         total_late_minutes: totalLateMinutes,
         half_day_count: halfDayCount,
         total_deduction_amount: totalDeductionsWithAdvance,
-        advance_deduction: Number(advanceDeductionTotal.toFixed(2)),
+        advance_deduction: Math.round(advanceDeductionTotal),
         deduction_breakdown: deductionBreakdown,
         daily_records: dailyRecords,
         gross_salary: grossSalary,
@@ -839,12 +890,12 @@ export class PayrollService {
       edited_at: new Date().toISOString(),
     };
 
-    if (updates.gross_salary !== undefined) payload.gross_salary = Number(updates.gross_salary);
-    if (updates.earned_salary !== undefined) payload.earned_salary = Number(updates.earned_salary);
+    if (updates.gross_salary !== undefined) payload.gross_salary = Math.round(Number(updates.gross_salary) || 0);
+    if (updates.earned_salary !== undefined) payload.earned_salary = Math.round(Number(updates.earned_salary) || 0);
     if (updates.total_deduction_amount !== undefined)
-      payload.total_deduction_amount = Number(updates.total_deduction_amount);
-    if (updates.advance_deduction !== undefined) payload.advance_deduction = Number(updates.advance_deduction);
-    if (updates.net_salary !== undefined) payload.net_salary = Math.max(0, Number(updates.net_salary));
+      payload.total_deduction_amount = Math.round(Number(updates.total_deduction_amount) || 0);
+    if (updates.advance_deduction !== undefined) payload.advance_deduction = Math.round(Number(updates.advance_deduction) || 0);
+    if (updates.net_salary !== undefined) payload.net_salary = Math.max(0, Math.round(Number(updates.net_salary) || 0));
     if (updates.working_days !== undefined) payload.working_days = Number(updates.working_days);
     if (updates.present_days !== undefined) payload.present_days = Number(updates.present_days);
     if (updates.absent_days !== undefined) payload.absent_days = Number(updates.absent_days);

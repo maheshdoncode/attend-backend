@@ -77,6 +77,7 @@ export const generateAttendanceExcel = async (employees, month, year) => {
       else if (cell.value === 'A') cell.font = { color: { argb: 'FFC00000' }, bold: true };
       else if (cell.value === 'L') cell.font = { color: { argb: 'FFE26B00' }, bold: true };
       else if (cell.value === 'HD') cell.font = { color: { argb: 'FF7030A0' }, bold: true };
+      else if (cell.value === 'H' || cell.value === 'OFF') cell.font = { color: { argb: 'FF0284C7' }, bold: true };
     }
   });
 

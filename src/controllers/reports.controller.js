@@ -79,20 +79,36 @@ export class ReportsController {
         });
       }
 
-      // 2. Fetch attendance records for these employees in date range
-      const { data: attendanceList, error: attErr } = await supabase
-        .from('attendance')
-        .select('*')
-        .in('employee_id', employeeIds)
-        .gte('date', startDate)
-        .lte('date', endDate);
+      // 2. Fetch attendance records, holidays, and working days overrides for date range
+      const [attendanceRes, holidaysRes, overridesRes] = await Promise.all([
+        supabase
+          .from('attendance')
+          .select('*')
+          .in('employee_id', employeeIds)
+          .gte('date', startDate)
+          .lte('date', endDate),
+        supabase
+          .from('holidays')
+          .select('*')
+          .gte('date', startDate)
+          .lte('date', endDate),
+        supabase
+          .from('working_days_overrides')
+          .select('*')
+          .gte('date', startDate)
+          .lte('date', endDate),
+      ]);
 
-      if (attErr) {
+      if (attendanceRes.error) {
         return res.status(500).json({
           success: false,
-          error: { code: 'DB_ERROR', message: attErr.message },
+          error: { code: 'DB_ERROR', message: attendanceRes.error.message },
         });
       }
+
+      const attendanceList = attendanceRes.data || [];
+      const holidaysList = holidaysRes.data || [];
+      const workingDaysOverrides = overridesRes.data || [];
 
       // 3. Map attendance by employee
       const attendanceMap = new Map();
@@ -116,14 +132,65 @@ export class ReportsController {
       });
 
       const result = employees.map((emp) => {
-        const dayList = attendanceMap.get(emp.id) || [];
+        const empAttList = attendanceMap.get(emp.id) || [];
+        const attByDate = new Map(empAttList.map((a) => [a.date, a]));
+        const dayList = [];
         const daysMap = {};
-        dayList.forEach((d) => {
-          const dayNum = parseInt(d.date.split('-')[2], 10);
-          const dayStr = d.date.split('-')[2];
-          daysMap[dayStr] = d;
-          daysMap[dayNum] = d;
-        });
+
+        for (let d = 1; d <= lastDay; d++) {
+          const dateStr = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+          const dayObj = new Date(yearNum, monthNum - 1, d);
+          const dayOfWeek = dayObj.getDay(); // 0 = Sun
+          const dayStr = String(d).padStart(2, '0');
+
+          // Check if date is a holiday for this employee
+          const holidayMatch = holidaysList.find(
+            (h) => h.date === dateStr && (!h.branch_id || emp.branch_ids.includes(h.branch_id))
+          );
+
+          // Check if date is a special working Sunday override
+          const isSunday = dayOfWeek === 0;
+          const isSpecialWorkingSunday = isSunday && workingDaysOverrides.some((o) => {
+            if (o.date !== dateStr) return false;
+            if (o.employee_id && o.employee_id === emp.id) return true;
+            if (!o.employee_id && (!o.branch_id || emp.branch_ids.includes(o.branch_id))) return true;
+            return false;
+          });
+
+          let dayRecord = attByDate.get(dateStr);
+
+          if (!dayRecord) {
+            if (holidayMatch) {
+              dayRecord = {
+                date: dateStr,
+                status: 'holiday',
+                is_holiday: true,
+                holiday_name: holidayMatch.name,
+                hours_worked: 0,
+              };
+            } else if (isSunday && !isSpecialWorkingSunday) {
+              dayRecord = {
+                date: dateStr,
+                status: 'holiday',
+                is_holiday: true,
+                holiday_name: 'Sunday Off',
+                hours_worked: 0,
+              };
+            } else {
+              dayRecord = {
+                date: dateStr,
+                status: 'not_marked',
+                hours_worked: 0,
+              };
+            }
+          } else if (holidayMatch) {
+            dayRecord.holiday_name = holidayMatch.name;
+          }
+
+          dayList.push(dayRecord);
+          daysMap[dayStr] = dayRecord;
+          daysMap[d] = dayRecord;
+        }
 
         return {
           id: emp.id,
@@ -141,6 +208,7 @@ export class ReportsController {
         success: true,
         month: monthNum,
         year: yearNum,
+        holidays: holidaysList,
         employees: result,
         matrix: result,
         data: result,
@@ -334,12 +402,28 @@ export class ReportsController {
         }
 
         const employeeIds = employees.map((e) => e.id);
-        const { data: attendanceList } = await supabase
-          .from('attendance')
-          .select('*')
-          .in('employee_id', employeeIds.length > 0 ? employeeIds : ['00000000-0000-0000-0000-000000000000'])
-          .gte('date', startDate)
-          .lte('date', endDate);
+        const [attRes, holRes, ovrRes] = await Promise.all([
+          supabase
+            .from('attendance')
+            .select('*')
+            .in('employee_id', employeeIds.length > 0 ? employeeIds : ['00000000-0000-0000-0000-000000000000'])
+            .gte('date', startDate)
+            .lte('date', endDate),
+          supabase
+            .from('holidays')
+            .select('*')
+            .gte('date', startDate)
+            .lte('date', endDate),
+          supabase
+            .from('working_days_overrides')
+            .select('*')
+            .gte('date', startDate)
+            .lte('date', endDate),
+        ]);
+
+        const attendanceList = attRes.data || [];
+        const holidaysList = holRes.data || [];
+        const workingDaysOverrides = ovrRes.data || [];
 
         const attendanceMap = new Map();
         (attendanceList || []).forEach((att) => {
@@ -347,12 +431,47 @@ export class ReportsController {
           attendanceMap.get(att.employee_id).push(att);
         });
 
-        const fullData = employees.map((emp) => ({
-          name: emp.name,
-          employee_code: emp.employee_code,
-          department: emp.department,
-          days: attendanceMap.get(emp.id) || [],
-        }));
+        const fullData = employees.map((emp) => {
+          const empAttList = attendanceMap.get(emp.id) || [];
+          const attByDate = new Map(empAttList.map((a) => [a.date, a]));
+          const days = [];
+
+          for (let d = 1; d <= lastDay; d++) {
+            const dateStr = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            const dayObj = new Date(yearNum, monthNum - 1, d);
+            const isSunday = dayObj.getDay() === 0;
+
+            const holidayMatch = holidaysList.find(
+              (h) => h.date === dateStr && (!h.branch_id || emp.branch_ids.includes(h.branch_id))
+            );
+
+            const isSpecialWorkingSunday = isSunday && workingDaysOverrides.some((o) => {
+              if (o.date !== dateStr) return false;
+              if (o.employee_id && o.employee_id === emp.id) return true;
+              if (!o.employee_id && (!o.branch_id || emp.branch_ids.includes(o.branch_id))) return true;
+              return false;
+            });
+
+            let record = attByDate.get(dateStr);
+            if (!record) {
+              if (holidayMatch) {
+                record = { date: dateStr, status: 'holiday', holiday_name: holidayMatch.name };
+              } else if (isSunday && !isSpecialWorkingSunday) {
+                record = { date: dateStr, status: 'holiday', holiday_name: 'Sunday Off' };
+              } else {
+                record = { date: dateStr, status: '-' };
+              }
+            }
+            days.push(record);
+          }
+
+          return {
+            name: emp.name,
+            employee_code: emp.employee_code,
+            department: emp.department,
+            days,
+          };
+        });
 
         const excelBuffer = await generateAttendanceExcel(fullData, monthNum, yearNum);
         res.setHeader(
