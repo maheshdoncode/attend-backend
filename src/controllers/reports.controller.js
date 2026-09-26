@@ -126,9 +126,28 @@ export class ReportsController {
           const cout = new Date(att.clock_out_time).getTime();
           hoursWorked = Number(((cout - cin) / (1000 * 60 * 60)).toFixed(2));
         }
+
+        const isFlaggedLate =
+          Boolean(att.is_flagged) &&
+          (String(att.flag_reason || '').toLowerCase().includes('late') ||
+            String(att.flag_reason || '').toLowerCase().includes('arrival'));
+
+        const isLate = att.status === 'late' || isFlaggedLate;
+        const isHalfDay = att.status === 'half_day';
+        let resolvedStatus = att.status;
+
+        if (isHalfDay && isLate) {
+          resolvedStatus = 'half_day_late';
+        }
+
         attendanceMap.get(att.employee_id).push({
           date: att.date,
-          status: att.status,
+          status: resolvedStatus,
+          raw_status: att.status,
+          is_late: isLate,
+          is_half_day: isHalfDay,
+          is_flagged: att.is_flagged,
+          flag_reason: att.flag_reason,
           clock_in: att.clock_in_time,
           clock_out: att.clock_out_time,
           hours_worked: hoursWorked,

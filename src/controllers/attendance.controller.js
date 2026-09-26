@@ -1094,26 +1094,42 @@ export class AttendanceController {
 
         // Derive aggregate status
         const hasPresent = shifts.some((s) => s.status === 'present');
-        const hasLate = shifts.some((s) => s.status === 'late');
+        const hasLateStatus = shifts.some((s) => s.status === 'late');
         const hasHalfDay = shifts.some((s) => s.status === 'half_day');
         const hasAbsent = shifts.some((s) => s.status === 'absent');
         const isFlagged = shifts.some((s) => s.is_flagged);
         const flaggedShift = shifts.find((s) => s.is_flagged);
+        const isFlaggedLate = shifts.some((s) =>
+          String(s.flag_reason || '').toLowerCase().includes('late')
+        );
+
+        const isLate = hasLateStatus || isFlaggedLate;
+        const isHalfDayAndLate = hasHalfDay && isLate;
 
         let overallStatus = 'not_marked';
-        if (hasLate) overallStatus = 'late';
-        else if (hasHalfDay) overallStatus = 'half_day';
-        else if (hasPresent) overallStatus = 'present';
-        else if (hasAbsent) overallStatus = 'absent';
+        if (hasHalfDay) {
+          overallStatus = isLate ? 'half_day_late' : 'half_day';
+        } else if (hasLateStatus) {
+          overallStatus = 'late';
+        } else if (hasPresent) {
+          overallStatus = isLate ? 'late' : 'present';
+        } else if (hasAbsent) {
+          overallStatus = 'absent';
+        }
 
         if (overallStatus === 'present') presentCount++;
         else if (overallStatus === 'late') lateCount++;
-        else if (overallStatus === 'half_day') halfDayCount++;
+        else if (overallStatus === 'half_day' || overallStatus === 'half_day_late') halfDayCount++;
         else if (overallStatus === 'absent') absentCount++;
         else notMarkedCount++;
 
+        // If employee is on half day and also late, also increment lateCount
+        if (isHalfDayAndLate && overallStatus === 'half_day_late') {
+          lateCount++;
+        }
+
         const primaryShift = shifts[0] || {};
-        const isPresent = ['present', 'late', 'half_day'].includes(overallStatus);
+        const isPresent = ['present', 'late', 'half_day', 'half_day_late'].includes(overallStatus);
 
         return {
           id: emp.id,
@@ -1126,6 +1142,9 @@ export class AttendanceController {
           branch_name: emp.branches?.[0]?.name || null,
           branch_id: emp.branch_ids?.[0] || null,
           is_present: isPresent,
+          is_late: isLate,
+          is_half_day: hasHalfDay,
+          is_half_day_and_late: isHalfDayAndLate,
           status: overallStatus,
           attendance_status: overallStatus,
           attendance_id: primaryShift.attendance_id || null,

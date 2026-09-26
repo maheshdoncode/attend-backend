@@ -96,6 +96,7 @@ export const generateAttendanceExcel = async (employees, month, year) => {
     late: 'L',
     holiday: 'H',
     half_day: 'HD',
+    half_day_late: 'HD/L',
   };
 
   // Add Employee Rows
@@ -128,7 +129,8 @@ export const generateAttendanceExcel = async (employees, month, year) => {
       if (cell.value === 'P') cell.font = { color: { argb: 'FF059669' }, bold: true };
       else if (cell.value === 'A') cell.font = { color: { argb: 'FFDC2626' }, bold: true };
       else if (cell.value === 'L') cell.font = { color: { argb: 'FFD97706' }, bold: true };
-      else if (cell.value === 'HD') cell.font = { color: { argb: 'FF7C3AED' }, bold: true };
+      else if (cell.value === 'HD') cell.font = { color: { argb: 'FFF97316' }, bold: true };
+      else if (cell.value === 'HD/L') cell.font = { color: { argb: 'FFEA580C' }, bold: true };
       else if (cell.value === 'H' || cell.value === 'OFF') cell.font = { color: { argb: 'FF2563EB' }, bold: true };
     }
   });
