@@ -76,7 +76,9 @@ export class TrackingService {
         .upsert(liveUpdate, { onConflict: 'employee_id' });
 
       if (liveErr) {
-        console.error('Error updating live location:', liveErr);
+        console.error(`❌ [LIVE LOCATION DB ERROR] Employee ${employeeId}:`, liveErr);
+      } else {
+        console.log(`📍 [LIVE LOCATION DB UPDATED] Employee ${employeeId} at (${liveUpdate.latitude}, ${liveUpdate.longitude}) | Speed: ${liveUpdate.speed} km/h`);
       }
     }
 
@@ -140,7 +142,9 @@ export class TrackingService {
           .eq('id', existingHistory.id);
 
         if (updateErr) {
-          console.error('Error updating location history by id:', updateErr);
+          console.error(`❌ [HISTORY DB UPDATE ERROR] Employee ${employeeId}:`, updateErr);
+        } else {
+          console.log(`🗺️ [HISTORY DB UPDATED] Employee ${employeeId} | Total today points: ${currentPoints.length} | Total distance: ${historyPayload.total_distance_km} km`);
         }
       } else {
         const { error: insertErr } = await supabase
@@ -148,10 +152,17 @@ export class TrackingService {
           .insert(historyPayload);
 
         if (insertErr) {
-          console.error('Error inserting location history, trying upsert:', insertErr);
-          await supabase
+          console.error(`⚠️ [HISTORY DB INSERT ERROR, RETRYING UPSERT] Employee ${employeeId}:`, insertErr);
+          const { error: upsertErr } = await supabase
             .from('employee_location_history')
             .upsert(historyPayload, { onConflict: 'employee_id,date' });
+          if (upsertErr) {
+            console.error(`❌ [HISTORY DB UPSERT ERROR] Employee ${employeeId}:`, upsertErr);
+          } else {
+            console.log(`🗺️ [HISTORY DB UPSERTED] Employee ${employeeId} | Points: ${currentPoints.length} | Distance: ${historyPayload.total_distance_km} km`);
+          }
+        } else {
+          console.log(`🗺️ [HISTORY DB CREATED] Employee ${employeeId} | Points: ${currentPoints.length} | Distance: ${historyPayload.total_distance_km} km`);
         }
       }
     }
