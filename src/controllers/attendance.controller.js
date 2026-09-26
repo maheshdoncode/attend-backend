@@ -1155,13 +1155,17 @@ export class AttendanceController {
         }
       }
 
+      const totalPresentCount = presentCount + lateCount + halfDayCount;
+
       return res.status(200).json({
         success: true,
         date: targetDate,
         summary: {
           total: employees.length,
           total_employees: employees.length,
-          present: presentCount,
+          present: totalPresentCount,
+          total_present: totalPresentCount,
+          on_time: presentCount,
           late: lateCount,
           half_day: halfDayCount,
           absent: absentCount,
