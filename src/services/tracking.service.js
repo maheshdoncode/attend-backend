@@ -76,6 +76,10 @@ export class TrackingService {
         .upsert(liveUpdate, { onConflict: 'employee_id' });
 
       if (liveErr) {
+        if (liveErr.code === '23503') {
+          console.warn(`⚠️ [TRACKING REJECTED] Employee ID ${employeeId} not found in users table. Stopping stream.`);
+          throw { status: 401, code: 'USER_NOT_FOUND', message: 'User account not found or has been deleted.' };
+        }
         console.error(`❌ [LIVE LOCATION DB ERROR] Employee ${employeeId}:`, liveErr);
       } else {
         console.log(`📍 [LIVE LOCATION DB UPDATED] Employee ${employeeId} at (${liveUpdate.latitude}, ${liveUpdate.longitude}) | Speed: ${liveUpdate.speed} km/h`);
@@ -152,11 +156,17 @@ export class TrackingService {
           .insert(historyPayload);
 
         if (insertErr) {
+          if (insertErr.code === '23503') {
+            throw { status: 401, code: 'USER_NOT_FOUND', message: 'User account not found or has been deleted.' };
+          }
           console.error(`⚠️ [HISTORY DB INSERT ERROR, RETRYING UPSERT] Employee ${employeeId}:`, insertErr);
           const { error: upsertErr } = await supabase
             .from('employee_location_history')
             .upsert(historyPayload, { onConflict: 'employee_id,date' });
           if (upsertErr) {
+            if (upsertErr.code === '23503') {
+              throw { status: 401, code: 'USER_NOT_FOUND', message: 'User account not found or has been deleted.' };
+            }
             console.error(`❌ [HISTORY DB UPSERT ERROR] Employee ${employeeId}:`, upsertErr);
           } else {
             console.log(`🗺️ [HISTORY DB UPSERTED] Employee ${employeeId} | Points: ${currentPoints.length} | Distance: ${historyPayload.total_distance_km} km`);
