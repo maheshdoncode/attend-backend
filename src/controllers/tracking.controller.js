@@ -21,7 +21,11 @@ export class TrackingController {
         ...result,
       });
     } catch (err) {
-      console.error(`❌ [LOCATION DATA ERROR] Employee ID: ${employeeId} | Error:`, err);
+      if (err.status === 401 || err.code === 'USER_NOT_FOUND') {
+        console.warn(`⚠️ [LOCATION DATA REJECTED] Employee ID: ${employeeId} is unauthorized or deleted. Returned 401.`);
+      } else {
+        console.error(`❌ [LOCATION DATA ERROR] Employee ID: ${employeeId} | Error:`, err);
+      }
       return res.status(err.status || 500).json({
         success: false,
         error: {
