@@ -136,12 +136,22 @@ function getColumnDataTypeSql(col) {
   return data_type.toUpperCase();
 }
 
+function sanitizeDbUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  let url = rawUrl.trim();
+  if ((url.startsWith('"') && url.endsWith('"')) || (url.startsWith("'") && url.endsWith("'"))) {
+    url = url.slice(1, -1).trim();
+  }
+  return url;
+}
+
 /**
  * Pure Node.js / PostgreSQL Table & Data Dumper
  * Fallback engine when pg_dump CLI is not installed on the system
  * Produces clean, runnable SQL that executes flawlessly on empty databases.
  */
-export async function executeNodePgDump(dbUrl, outputPath) {
+export async function executeNodePgDump(rawDbUrl, outputPath) {
+  const dbUrl = sanitizeDbUrl(rawDbUrl);
   const client = new Client({
     connectionString: dbUrl,
     ssl: { rejectUnauthorized: false }
@@ -370,7 +380,8 @@ export async function executeNodePgDump(dbUrl, outputPath) {
 /**
  * Executes pg_dump to produce a SQL backup file, or falls back to Node.js pg dumper
  */
-export function executeDump(dbUrl, outputPath) {
+export function executeDump(rawDbUrl, outputPath) {
+  const dbUrl = sanitizeDbUrl(rawDbUrl);
   return new Promise((resolve, reject) => {
     // 1. Try native pg_dump if present
     const command = `pg_dump "${dbUrl}" --no-owner --no-acl -F p -f "${outputPath}"`;
