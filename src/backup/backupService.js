@@ -139,6 +139,10 @@ function getColumnDataTypeSql(col) {
 function sanitizeDbUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return '';
   let url = rawUrl.trim();
+  // Strip leading key name if accidentally pasted into value box (e.g. SUPABASE_DB_URL=postgresql://...)
+  if (url.includes('=') && (url.toUpperCase().startsWith('SUPABASE_DB_URL=') || url.toUpperCase().startsWith('DATABASE_URL='))) {
+    url = url.substring(url.indexOf('=') + 1).trim();
+  }
   if ((url.startsWith('"') && url.endsWith('"')) || (url.startsWith("'") && url.endsWith("'"))) {
     url = url.slice(1, -1).trim();
   }
