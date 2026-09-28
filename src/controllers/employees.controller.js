@@ -935,7 +935,11 @@ export class EmployeesController {
       }
 
       if (Object.keys(userUpdates).length > 0) {
-        await supabase.from('users').update(userUpdates).eq('id', id);
+        const { error: userUpdateErr } = await supabase.from('users').update(userUpdates).eq('id', id);
+        if (userUpdateErr) {
+          console.error('Error updating users table:', userUpdateErr);
+          throw new Error(`Failed to update user profile: ${userUpdateErr.message}`);
+        }
       }
 
       // 3. Update employee_profiles table
