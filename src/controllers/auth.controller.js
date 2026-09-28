@@ -98,7 +98,7 @@ export class AuthController {
         branchLunchMode: primaryBranchLunchMode,
       });
 
-      // 4. Sign JWT
+      // 4. Sign JWT (Non-expiring / Long-lived permanent token)
       const jwtSecret = process.env.JWT_SECRET || 'default_jwt_secret_change_in_production';
       const token = jwt.sign(
         {
@@ -107,8 +107,7 @@ export class AuthController {
           role: user.role,
           branchIds,
         },
-        jwtSecret,
-        { expiresIn: '24h' }
+        jwtSecret
       );
 
       return res.status(200).json({
