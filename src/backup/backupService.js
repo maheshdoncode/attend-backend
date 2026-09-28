@@ -142,6 +142,11 @@ function sanitizeDbUrl(rawUrl) {
   if ((url.startsWith('"') && url.endsWith('"')) || (url.startsWith("'") && url.endsWith("'"))) {
     url = url.slice(1, -1).trim();
   }
+  if (!url.startsWith('postgresql://') && !url.startsWith('postgres://')) {
+    throw new Error(
+      `SUPABASE_DB_URL must be a valid PostgreSQL connection URI starting with 'postgresql://'. Received: "${url.substring(0, 20)}..."`
+    );
+  }
   return url;
 }
 
@@ -157,6 +162,7 @@ export async function executeNodePgDump(rawDbUrl, outputPath) {
     ssl: { rejectUnauthorized: false }
   });
 
+  console.log(`[DATABASE BACKUP] Connecting to PostgreSQL host: ${client.connectionParameters.host}:${client.connectionParameters.port} (database: ${client.connectionParameters.database})...`);
   await client.connect();
 
   try {
