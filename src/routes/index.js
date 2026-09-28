@@ -13,6 +13,7 @@ import advanceSalaryRoutes from './advance_salary.routes.js';
 import appUpdatesRoutes from './app_updates.routes.js';
 import organizationRoutes from './organization.routes.js';
 import trackingRoutes from './tracking.routes.js';
+import backupRoutes from '../backup/backupRoutes.js';
 
 const router = Router();
 
@@ -31,5 +32,6 @@ router.use('/advance-salary', advanceSalaryRoutes);
 router.use('/app-updates', appUpdatesRoutes);
 router.use('/organization', organizationRoutes);
 router.use('/tracking', trackingRoutes);
+router.use('/backup', backupRoutes);
 
 export default router;

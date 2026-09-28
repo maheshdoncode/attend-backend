@@ -9,7 +9,8 @@
     "dev": "concurrently -k -n \"SERVER,NGROK\" -c \"cyan.bold,magenta.bold\" \"nodemon index.js\" \"npx ngrok http 8000\"",
     "dev:server": "nodemon index.js",
     "tunnel": "npx ngrok http 8000",
-    "seed": "node scripts/seed_owner.js"
+    "seed": "node scripts/seed_owner.js",
+    "gdrive-auth": "node scripts/get_gdrive_token.js"
   },
   "keywords": [
     "attendy",
@@ -25,14 +26,18 @@
     "@supabase/supabase-js": "^2.49.1",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
+    "cronstrue": "^3.27.0",
     "dotenv": "^16.4.7",
     "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
     "geolib": "^3.3.4",
+    "googleapis": "^182.0.0",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
+    "node-cron": "^4.6.0",
     "pdfkit": "^0.16.0",
+    "pg": "^8.23.0",
     "qrcode": "^1.5.4",
     "zod": "^3.24.2"
   },

@@ -4,6 +4,8 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import hrmRoutes from './routes/index.js';
+import backupRoutes from './backup/backupRoutes.js';
+import { initBackupCron } from './backup/backupCron.js';
 
 dotenv.config();
 
@@ -61,6 +63,9 @@ app.get('/api/health', (req, res) => {
 // HRMS API Routes: /api/hrm/*
 app.use('/api/hrm', hrmRoutes);
 
+// Direct Backup Routes: /api/backup/*
+app.use('/api/backup', backupRoutes);
+
 // 404 Route Not Found Handler
 app.use((req, res) => {
   res.status(404).json({
@@ -112,6 +117,10 @@ if (process.env.NODE_ENV !== 'test') {
     console.log(`🚀 Attendy HRMS API Server running on port ${PORT}`);
     console.log(`🔗 Local Base URL:     http://localhost:${PORT}/api/hrm`);
     console.log(`🛡️  Environment:        ${process.env.NODE_ENV || 'development'}`);
+    
+    // Initialize Automated Database Backup Cron
+    initBackupCron();
+
     await logNgrokUrl();
   });
 }
