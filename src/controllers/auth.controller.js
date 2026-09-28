@@ -63,18 +63,40 @@ export class AuthController {
         });
       }
 
-      // 3. Fetch branchIds for branch_manager
+      // 3. Fetch branchIds and branches for branch_manager & employee
       let branchIds = [];
+      let primaryBranchId = null;
+      let primaryBranchLunchMode = null;
+
       if (user.role === 'branch_manager') {
         const { data: bmBranches } = await supabase
           .from('branch_managers')
-          .select('branch_id')
+          .select('branch_id, branches(lunch_tracking_mode)')
           .eq('user_id', user.id);
 
         if (bmBranches) {
           branchIds = bmBranches.map((b) => b.branch_id);
+          primaryBranchId = branchIds[0] || null;
+          primaryBranchLunchMode = bmBranches[0]?.branches?.lunch_tracking_mode || null;
+        }
+      } else if (user.role === 'employee') {
+        const { data: assignments } = await supabase
+          .from('branch_employee_assignments')
+          .select('branch_id, branches(lunch_tracking_mode)')
+          .eq('employee_id', user.id);
+
+        if (assignments && assignments.length > 0) {
+          branchIds = assignments.map((a) => a.branch_id);
+          primaryBranchId = branchIds[0] || null;
+          primaryBranchLunchMode = assignments[0]?.branches?.lunch_tracking_mode || null;
         }
       }
+
+      const isLunchTrackingEnabled = await resolveLunchTrackingEnabled({
+        userLunchMode: user.lunch_tracking_mode,
+        branchId: primaryBranchId,
+        branchLunchMode: primaryBranchLunchMode,
+      });
 
       // 4. Sign JWT
       const jwtSecret = process.env.JWT_SECRET || 'default_jwt_secret_change_in_production';
@@ -98,6 +120,8 @@ export class AuthController {
           email: user.email,
           role: user.role,
           branchIds,
+          lunch_tracking_mode: user.lunch_tracking_mode || 'inherit',
+          is_lunch_tracking_enabled: isLunchTrackingEnabled,
         },
       });
     } catch (err) {
@@ -121,7 +145,7 @@ export class AuthController {
 
       const { data: user, error: userError } = await supabase
         .from('users')
-        .select('id, name, email, role, is_active, created_at')
+        .select('id, name, email, role, lunch_tracking_mode, is_active, created_at')
         .eq('id', userId)
         .maybeSingle();
 

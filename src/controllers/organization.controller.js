@@ -20,11 +20,14 @@ export class OrganizationController {
         });
       }
 
+      const settingsValue = {
+        enabled: Boolean(data?.value?.enabled ?? true),
+      };
+
       return res.status(200).json({
         success: true,
-        settings: {
-          enabled: Boolean(data?.value?.enabled ?? true),
-        },
+        settings: settingsValue,
+        data: settingsValue,
       });
     } catch (err) {
       console.error('Get lunch tracking settings error:', err);
@@ -67,6 +70,7 @@ export class OrganizationController {
         success: true,
         message: 'Global lunch tracking settings updated successfully',
         settings: data.value,
+        data: data.value,
       });
     } catch (err) {
       console.error('Update lunch tracking settings error:', err);
