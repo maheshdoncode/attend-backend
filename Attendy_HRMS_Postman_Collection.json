@@ -1554,6 +1554,88 @@
           }
         }
       ]
+    },
+    {
+      "name": "Database Backup & Google Drive",
+      "item": [
+        {
+          "name": "Trigger Database Backup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/backup/trigger",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "backup",
+                "trigger"
+              ]
+            },
+            "description": "Immediately triggers a full database backup, uploads the timestamped SQL file to Google Drive, and prunes old backups beyond 7 days retention."
+          }
+        },
+        {
+          "name": "Get Backup Cron Schedule",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/backup/schedule",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "backup",
+                "schedule"
+              ]
+            },
+            "description": "Retrieves the currently active automated database backup cron schedule and human-readable description."
+          }
+        },
+        {
+          "name": "Update Backup Cron Schedule",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"schedule\": \"0 3 * * *\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/backup/schedule",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "backup",
+                "schedule"
+              ]
+            },
+            "description": "Dynamically updates the database backup cron schedule in memory without requiring a server restart."
+          }
+        }
+      ]
     }
   ]
 }

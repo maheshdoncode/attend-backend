@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { supabase } from '../src/db/supabase.js';
+import { encryptCredential } from '../src/utils/crypto.js';
 
 async function seedOwner() {
   const email = 'owner@attendy.com';
@@ -11,9 +12,10 @@ async function seedOwner() {
     .from('users')
     .upsert(
       {
-        name: 'Attendy Admin',
+        name: 'Attendy Owner',
         email,
         password_hash,
+        current_password: encryptCredential(password),
         role: 'owner',
         is_active: true,
       },
