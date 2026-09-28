@@ -10,7 +10,8 @@
     "dev:server": "nodemon index.js",
     "tunnel": "npx ngrok http 8000",
     "seed": "node scripts/seed_owner.js",
-    "gdrive-auth": "node scripts/get_gdrive_token.js"
+    "gdrive-auth": "node scripts/get_gdrive_token.js",
+    "postman:sync": "node scripts/sync_postman.js"
   },
   "keywords": [
     "attendy",
