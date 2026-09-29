@@ -19,8 +19,8 @@ export class HolidaysController {
         });
       }
 
-      // Branch Manager permission checks
-      if (req.user.role === 'branch_manager') {
+      // Branch Manager & Admin permission checks
+      if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
         if (!branch_id) {
           return res.status(403).json({
             success: false,
@@ -156,7 +156,7 @@ export class HolidaysController {
         });
       }
 
-      if (req.user.role === 'branch_manager') {
+      if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
         const scopedIds = req.scopedBranchIds || [];
         if (!holiday.branch_id || !scopedIds.includes(holiday.branch_id)) {
           return res.status(403).json({

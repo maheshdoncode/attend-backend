@@ -76,15 +76,27 @@ export class BranchesController {
     try {
       let query = supabase.from('branches').select('*').eq('is_active', true);
 
-      if (req.user.role === 'branch_manager') {
-        const scopedIds = req.scopedBranchIds || [];
-        if (scopedIds.length === 0) {
+      if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
+        let allowedIds = Array.isArray(req.user.branchIds) && req.user.branchIds.length > 0
+          ? req.user.branchIds
+          : (req.scopedBranchIds || []);
+
+        if (allowedIds.length === 0) {
+          const { data: bm } = await supabase.from('branch_managers').select('branch_id').eq('user_id', req.user.id);
+          const { data: bea } = await supabase.from('branch_employee_assignments').select('branch_id').eq('employee_id', req.user.id);
+          allowedIds = Array.from(new Set([
+            ...(bm || []).map((b) => b.branch_id),
+            ...(bea || []).map((b) => b.branch_id),
+          ])).filter(Boolean);
+        }
+
+        if (allowedIds.length === 0) {
           return res.status(200).json({
             success: true,
             branches: [],
           });
         }
-        query = query.in('id', scopedIds);
+        query = query.in('id', allowedIds);
       }
 
       const { data: branches, error } = await query.order('name', { ascending: true });

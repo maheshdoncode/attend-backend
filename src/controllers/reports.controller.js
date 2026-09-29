@@ -37,7 +37,7 @@ export class ReportsController {
           employee_profiles (employee_code, department),
           branch_employee_assignments (branch_id), branch_managers (branch_id)
         `)
-        .in('role', ['employee', 'branch_manager'])
+        .in('role', ['employee', 'branch_manager', 'admin'])
         .eq('is_active', true);
 
       if (employee_id) empQuery = empQuery.eq('id', employee_id);
@@ -69,7 +69,7 @@ export class ReportsController {
         employees = employees.filter((e) => e.branch_ids.includes(branch_id));
       }
 
-      if (req.user.role === 'branch_manager') {
+      if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
         const scopedIds = new Set(req.scopedBranchIds || []);
         employees = employees.filter((e) => e.branch_ids.some((b) => scopedIds.has(b)));
       }
@@ -83,8 +83,15 @@ export class ReportsController {
         });
       }
 
-      // 2. Fetch attendance records, holidays, and working days overrides for date range
-      const [attendanceRes, holidaysRes, overridesRes] = await Promise.all([
+      // 2. Fetch attendance records, holidays, overrides, and shift schedules
+      const [
+        attendanceRes,
+        holidaysRes,
+        overridesRes,
+        schedulesRes,
+        shiftAssignmentsRes,
+        overridesSchedulesRes,
+      ] = await Promise.all([
         supabase
           .from('attendance')
           .select('*')
@@ -101,6 +108,15 @@ export class ReportsController {
           .select('*')
           .gte('date', startDate)
           .lte('date', endDate),
+        supabase.from('work_schedules').select('*'),
+        supabase
+          .from('employee_shift_assignments')
+          .select('employee_id, schedule_id')
+          .in('employee_id', employeeIds),
+        supabase
+          .from('employee_schedule_overrides')
+          .select('employee_id, schedule_id, work_schedules(*)')
+          .in('employee_id', employeeIds),
       ]);
 
       if (attendanceRes.error) {
@@ -113,13 +129,42 @@ export class ReportsController {
       const attendanceList = attendanceRes.data || [];
       const holidaysList = holidaysRes.data || [];
       const workingDaysOverrides = overridesRes.data || [];
+      const allSchedules = schedulesRes.data || [];
+      const scheduleMap = new Map((allSchedules || []).map((s) => [s.id, s]));
+      const defaultSchedule =
+        (allSchedules || []).find((s) => s.is_default) ||
+        allSchedules?.[0] || {
+          id: null,
+          start_time: '09:00:00',
+          end_time: '18:00:00',
+          name: 'Day Shift',
+        };
 
-      // 3. Map attendance by employee
-      const attendanceMap = new Map();
-      (attendanceList || []).forEach((att) => {
-        if (!attendanceMap.has(att.employee_id)) {
-          attendanceMap.set(att.employee_id, []);
+      // Map employee shift assignments
+      const empShiftAssignmentsMap = new Map();
+      (shiftAssignmentsRes.data || []).forEach((sa) => {
+        if (!empShiftAssignmentsMap.has(sa.employee_id)) {
+          empShiftAssignmentsMap.set(sa.employee_id, []);
         }
+        const sch = scheduleMap.get(sa.schedule_id);
+        if (sch) empShiftAssignmentsMap.get(sa.employee_id).push(sch);
+      });
+
+      // Map schedule overrides
+      const scheduleOverrideMap = new Map();
+      (overridesSchedulesRes.data || []).forEach((ov) => {
+        if (ov.work_schedules) {
+          scheduleOverrideMap.set(ov.employee_id, ov.work_schedules);
+        }
+      });
+
+      // Index attendance by employee_id -> list of records
+      const empAttendanceMap = new Map();
+      (attendanceList || []).forEach((att) => {
+        if (!empAttendanceMap.has(att.employee_id)) {
+          empAttendanceMap.set(att.employee_id, []);
+        }
+
         let hoursWorked = 0;
         if (att.clock_in_time && att.clock_out_time) {
           const cin = new Date(att.clock_in_time).getTime();
@@ -140,8 +185,10 @@ export class ReportsController {
           resolvedStatus = 'half_day_late';
         }
 
-        attendanceMap.get(att.employee_id).push({
+        empAttendanceMap.get(att.employee_id).push({
+          id: att.id,
           date: att.date,
+          schedule_id: att.schedule_id || null,
           status: resolvedStatus,
           raw_status: att.status,
           is_late: isLate,
@@ -154,9 +201,9 @@ export class ReportsController {
         });
       });
 
-      const result = employees.map((emp) => {
-        const empAttList = attendanceMap.get(emp.id) || [];
-        const attByDate = new Map(empAttList.map((a) => [a.date, a]));
+      // Helper function to build 1..lastDay matrix for an employee on a specific shift
+      const buildEmployeeShiftDays = (emp, shift) => {
+        const empAttList = empAttendanceMap.get(emp.id) || [];
         const dayList = [];
         const daysMap = {};
 
@@ -173,16 +220,29 @@ export class ReportsController {
 
           // Check if date is a special working Sunday override
           const isSunday = dayOfWeek === 0;
-          const isSpecialWorkingSunday = isSunday && workingDaysOverrides.some((o) => {
-            if (o.date !== dateStr) return false;
-            if (o.employee_id && o.employee_id === emp.id) return true;
-            if (!o.employee_id && (!o.branch_id || emp.branch_ids.includes(o.branch_id))) return true;
-            return false;
-          });
+          const isSpecialWorkingSunday =
+            isSunday &&
+            workingDaysOverrides.some((o) => {
+              if (o.date !== dateStr) return false;
+              if (o.employee_id && o.employee_id === emp.id) return true;
+              if (!o.employee_id && (!o.branch_id || emp.branch_ids.includes(o.branch_id))) return true;
+              return false;
+            });
 
-          let dayRecord = attByDate.get(dateStr);
+          // Match punch for this specific shift
+          let dayRecord = empAttList.find(
+            (a) => a.date === dateStr && (shift.id ? a.schedule_id === shift.id : true)
+          );
 
-          if (!dayRecord) {
+          // Fallback if employee only has 1 shift and punch had null schedule_id
+          if (!dayRecord && empAttList.length > 0) {
+            const matchesOnDate = empAttList.filter((a) => a.date === dateStr);
+            if (matchesOnDate.length === 1 && !matchesOnDate[0].schedule_id) {
+              dayRecord = matchesOnDate[0];
+            }
+          }
+
+          if (!dayRecord || dayRecord.status === 'not_marked' || dayRecord.status === '-') {
             if (holidayMatch) {
               dayRecord = {
                 date: dateStr,
@@ -199,7 +259,7 @@ export class ReportsController {
                 holiday_name: 'Sunday Off',
                 hours_worked: 0,
               };
-            } else {
+            } else if (!dayRecord) {
               dayRecord = {
                 date: dateStr,
                 status: 'not_marked',
@@ -207,7 +267,7 @@ export class ReportsController {
               };
             }
           } else if (holidayMatch) {
-            dayRecord.holiday_name = holidayMatch.name;
+            dayRecord = { ...dayRecord, holiday_name: holidayMatch.name };
           }
 
           dayList.push(dayRecord);
@@ -215,6 +275,85 @@ export class ReportsController {
           daysMap[d] = dayRecord;
         }
 
+        return { dayList, daysMap };
+      };
+
+      // 4. Build per-shift matrices
+      // Determine effective shifts for each employee
+      const employeeAssignedShiftsMap = new Map();
+      employees.forEach((emp) => {
+        const assigned = empShiftAssignmentsMap.get(emp.id) || [];
+        const effective =
+          assigned.length > 0
+            ? assigned
+            : [scheduleOverrideMap.get(emp.id) || defaultSchedule];
+        employeeAssignedShiftsMap.set(emp.id, effective);
+      });
+
+      // Group employees by shift
+      const shiftGroupsMap = new Map();
+      allSchedules.forEach((sch) => {
+        shiftGroupsMap.set(sch.id, {
+          schedule_id: sch.id,
+          schedule_name: sch.name || 'Shift Schedule',
+          start_time: sch.start_time,
+          end_time: sch.end_time,
+          is_default: sch.is_default || false,
+          employees: [],
+        });
+      });
+
+      // Ensure default shift exists in map if not in allSchedules
+      if (defaultSchedule.id && !shiftGroupsMap.has(defaultSchedule.id)) {
+        shiftGroupsMap.set(defaultSchedule.id, {
+          schedule_id: defaultSchedule.id,
+          schedule_name: defaultSchedule.name || 'Day Shift',
+          start_time: defaultSchedule.start_time,
+          end_time: defaultSchedule.end_time,
+          is_default: true,
+          employees: [],
+        });
+      }
+
+      employees.forEach((emp) => {
+        const effectiveShifts = employeeAssignedShiftsMap.get(emp.id) || [defaultSchedule];
+        effectiveShifts.forEach((shift) => {
+          const shiftKey = shift.id || 'default';
+          if (!shiftGroupsMap.has(shiftKey)) {
+            shiftGroupsMap.set(shiftKey, {
+              schedule_id: shift.id || null,
+              schedule_name: shift.name || 'Shift Schedule',
+              start_time: shift.start_time,
+              end_time: shift.end_time,
+              is_default: shift.is_default || false,
+              employees: [],
+            });
+          }
+
+          const { dayList, daysMap } = buildEmployeeShiftDays(emp, shift);
+          shiftGroupsMap.get(shiftKey).employees.push({
+            id: emp.id,
+            employee_id: emp.id,
+            name: emp.name,
+            employee_name: emp.name,
+            employee_code: emp.employee_code,
+            department: emp.department,
+            days: dayList,
+            days_map: daysMap,
+          });
+        });
+      });
+
+      // Filter shift groups: include shifts that have assigned employees (or all if none)
+      const shiftsResult = Array.from(shiftGroupsMap.values()).filter(
+        (sg) => sg.employees.length > 0
+      );
+
+      // 5. Build flat result for backward compatibility
+      const flatResult = employees.map((emp) => {
+        const effectiveShifts = employeeAssignedShiftsMap.get(emp.id) || [defaultSchedule];
+        const primaryShift = effectiveShifts[0] || defaultSchedule;
+        const { dayList, daysMap } = buildEmployeeShiftDays(emp, primaryShift);
         return {
           id: emp.id,
           employee_id: emp.id,
@@ -232,9 +371,10 @@ export class ReportsController {
         month: monthNum,
         year: yearNum,
         holidays: holidaysList,
-        employees: result,
-        matrix: result,
-        data: result,
+        shifts: shiftsResult,
+        employees: flatResult,
+        matrix: flatResult,
+        data: flatResult,
       });
     } catch (err) {
       console.error('Attendance report error:', err);
@@ -323,7 +463,7 @@ export class ReportsController {
         formatted = formatted.filter((item) => item.branch_ids.includes(branch_id));
       }
 
-      if (req.user.role === 'branch_manager') {
+      if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
         const scopedIds = new Set(req.scopedBranchIds || []);
         formatted = formatted.filter((item) =>
           item.branch_ids.some((b) => scopedIds.has(b))
@@ -397,7 +537,7 @@ export class ReportsController {
             employee_profiles (employee_code, department),
             branch_employee_assignments (branch_id), branch_managers (branch_id)
           `)
-          .in('role', ['employee', 'branch_manager'])
+          .in('role', ['employee', 'branch_manager', 'admin'])
           .eq('is_active', true);
 
         const { data: rawEmployees } = await empQuery;
@@ -419,13 +559,20 @@ export class ReportsController {
           employees = employees.filter((e) => e.branch_ids.includes(branch_id));
         }
 
-        if (req.user.role === 'branch_manager') {
+        if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
           const scopedIds = new Set(req.scopedBranchIds || []);
           employees = employees.filter((e) => e.branch_ids.some((b) => scopedIds.has(b)));
         }
 
         const employeeIds = employees.map((e) => e.id);
-        const [attRes, holRes, ovrRes] = await Promise.all([
+        const [
+          attRes,
+          holRes,
+          ovrRes,
+          schedulesRes,
+          shiftAssignmentsRes,
+          overridesSchedulesRes,
+        ] = await Promise.all([
           supabase
             .from('attendance')
             .select('*')
@@ -442,22 +589,75 @@ export class ReportsController {
             .select('*')
             .gte('date', startDate)
             .lte('date', endDate),
+          supabase.from('work_schedules').select('*'),
+          supabase
+            .from('employee_shift_assignments')
+            .select('employee_id, schedule_id')
+            .in('employee_id', employeeIds.length > 0 ? employeeIds : ['00000000-0000-0000-0000-000000000000']),
+          supabase
+            .from('employee_schedule_overrides')
+            .select('employee_id, schedule_id, work_schedules(*)')
+            .in('employee_id', employeeIds.length > 0 ? employeeIds : ['00000000-0000-0000-0000-000000000000']),
         ]);
 
         const attendanceList = attRes.data || [];
         const holidaysList = holRes.data || [];
         const workingDaysOverrides = ovrRes.data || [];
+        const allSchedules = schedulesRes.data || [];
+        const scheduleMap = new Map((allSchedules || []).map((s) => [s.id, s]));
+        const defaultSchedule =
+          (allSchedules || []).find((s) => s.is_default) ||
+          allSchedules?.[0] || {
+            id: null,
+            start_time: '09:00:00',
+            end_time: '18:00:00',
+            name: 'Day Shift',
+          };
 
-        const attendanceMap = new Map();
-        (attendanceList || []).forEach((att) => {
-          if (!attendanceMap.has(att.employee_id)) attendanceMap.set(att.employee_id, []);
-          attendanceMap.get(att.employee_id).push(att);
+        const empShiftAssignmentsMap = new Map();
+        (shiftAssignmentsRes.data || []).forEach((sa) => {
+          if (!empShiftAssignmentsMap.has(sa.employee_id)) {
+            empShiftAssignmentsMap.set(sa.employee_id, []);
+          }
+          const sch = scheduleMap.get(sa.schedule_id);
+          if (sch) empShiftAssignmentsMap.get(sa.employee_id).push(sch);
         });
 
-        const fullData = employees.map((emp) => {
-          const empAttList = attendanceMap.get(emp.id) || [];
-          const attByDate = new Map(empAttList.map((a) => [a.date, a]));
-          const days = [];
+        const scheduleOverrideMap = new Map();
+        (overridesSchedulesRes.data || []).forEach((ov) => {
+          if (ov.work_schedules) {
+            scheduleOverrideMap.set(ov.employee_id, ov.work_schedules);
+          }
+        });
+
+        const empAttendanceMap = new Map();
+        (attendanceList || []).forEach((att) => {
+          if (!empAttendanceMap.has(att.employee_id)) empAttendanceMap.set(att.employee_id, []);
+
+          let isFlaggedLate =
+            Boolean(att.is_flagged) &&
+            (String(att.flag_reason || '').toLowerCase().includes('late') ||
+              String(att.flag_reason || '').toLowerCase().includes('arrival'));
+          let isLate = att.status === 'late' || isFlaggedLate;
+          let isHalfDay = att.status === 'half_day';
+          let resolvedStatus = att.status;
+
+          if (isHalfDay && isLate) {
+            resolvedStatus = 'half_day_late';
+          }
+
+          empAttendanceMap.get(att.employee_id).push({
+            ...att,
+            status: resolvedStatus,
+            is_late: isLate,
+            is_half_day: isHalfDay,
+          });
+        });
+
+        const buildEmployeeShiftDays = (emp, shift) => {
+          const empAttList = empAttendanceMap.get(emp.id) || [];
+          const dayList = [];
+          const daysMap = {};
 
           for (let d = 1; d <= lastDay; d++) {
             const dateStr = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -468,35 +668,93 @@ export class ReportsController {
               (h) => h.date === dateStr && (!h.branch_id || emp.branch_ids.includes(h.branch_id))
             );
 
-            const isSpecialWorkingSunday = isSunday && workingDaysOverrides.some((o) => {
-              if (o.date !== dateStr) return false;
-              if (o.employee_id && o.employee_id === emp.id) return true;
-              if (!o.employee_id && (!o.branch_id || emp.branch_ids.includes(o.branch_id))) return true;
-              return false;
-            });
+            const isSpecialWorkingSunday =
+              isSunday &&
+              workingDaysOverrides.some((o) => {
+                if (o.date !== dateStr) return false;
+                if (o.employee_id && o.employee_id === emp.id) return true;
+                if (!o.employee_id && (!o.branch_id || emp.branch_ids.includes(o.branch_id))) return true;
+                return false;
+              });
 
-            let record = attByDate.get(dateStr);
-            if (!record) {
-              if (holidayMatch) {
-                record = { date: dateStr, status: 'holiday', holiday_name: holidayMatch.name };
-              } else if (isSunday && !isSpecialWorkingSunday) {
-                record = { date: dateStr, status: 'holiday', holiday_name: 'Sunday Off' };
-              } else {
-                record = { date: dateStr, status: '-' };
+            let record = empAttList.find(
+              (a) => a.date === dateStr && (shift.id ? a.schedule_id === shift.id : true)
+            );
+
+            if (!record && empAttList.length > 0) {
+              const matchesOnDate = empAttList.filter((a) => a.date === dateStr);
+              if (matchesOnDate.length === 1 && !matchesOnDate[0].schedule_id) {
+                record = matchesOnDate[0];
               }
             }
-            days.push(record);
+
+            if (!record || record.status === 'not_marked' || record.status === '-') {
+              if (holidayMatch) {
+                record = { date: dateStr, status: 'holiday', is_holiday: true, holiday_name: holidayMatch.name };
+              } else if (isSunday && !isSpecialWorkingSunday) {
+                record = { date: dateStr, status: 'holiday', is_holiday: true, holiday_name: 'Sunday Off' };
+              } else if (!record) {
+                record = { date: dateStr, status: 'not_marked' };
+              }
+            } else if (holidayMatch) {
+              record = { ...record, holiday_name: holidayMatch.name };
+            }
+
+            dayList.push(record);
+            daysMap[String(d).padStart(2, '0')] = record;
+            daysMap[d] = record;
           }
 
-          return {
-            name: emp.name,
-            employee_code: emp.employee_code,
-            department: emp.department,
-            days,
-          };
+          return { dayList, daysMap };
+        };
+
+        const shiftGroupsMap = new Map();
+        allSchedules.forEach((sch) => {
+          shiftGroupsMap.set(sch.id, {
+            schedule_id: sch.id,
+            schedule_name: sch.name || 'Shift',
+            employees: [],
+          });
         });
 
-        const excelBuffer = await generateAttendanceExcel(fullData, monthNum, yearNum);
+        employees.forEach((emp) => {
+          const assigned = empShiftAssignmentsMap.get(emp.id) || [];
+          const effectiveShifts =
+            assigned.length > 0
+              ? assigned
+              : [scheduleOverrideMap.get(emp.id) || defaultSchedule];
+
+          effectiveShifts.forEach((shift) => {
+            const shiftKey = shift.id || 'default';
+            if (!shiftGroupsMap.has(shiftKey)) {
+              shiftGroupsMap.set(shiftKey, {
+                schedule_id: shift.id || null,
+                schedule_name: shift.name || 'Shift',
+                employees: [],
+              });
+            }
+
+            const { dayList, daysMap } = buildEmployeeShiftDays(emp, shift);
+            shiftGroupsMap.get(shiftKey).employees.push({
+              name: emp.name,
+              employee_name: emp.name,
+              employee_code: emp.employee_code,
+              department: emp.department,
+              days: dayList,
+              days_map: daysMap,
+            });
+          });
+        });
+
+        const exportShifts = Array.from(shiftGroupsMap.values()).filter(
+          (sg) => sg.employees.length > 0
+        );
+
+        const excelBuffer = await generateAttendanceExcel(
+          { shifts: exportShifts },
+          monthNum,
+          yearNum
+        );
         res.setHeader(
           'Content-Type',
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -559,7 +817,7 @@ export class ReportsController {
           formatted = formatted.filter((item) => item.branch_ids.includes(branch_id));
         }
 
-        if (req.user.role === 'branch_manager') {
+        if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
           const scopedIds = new Set(req.scopedBranchIds || []);
           formatted = formatted.filter((item) =>
             item.branch_ids.some((b) => scopedIds.has(b))

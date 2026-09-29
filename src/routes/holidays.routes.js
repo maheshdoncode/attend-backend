@@ -9,8 +9,8 @@ const router = Router();
 router.use(auth);
 router.use(branchScope);
 
-router.post('/', requireRole('owner', 'branch_manager'), HolidaysController.create);
+router.post('/', requireRole('owner', 'branch_manager', 'admin'), HolidaysController.create);
 router.get('/', HolidaysController.list); // All authenticated users
-router.delete('/:id', requireRole('owner', 'branch_manager'), HolidaysController.remove);
+router.delete('/:id', requireRole('owner', 'branch_manager', 'admin'), HolidaysController.remove);
 
 export default router;

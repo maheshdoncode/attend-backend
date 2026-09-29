@@ -13,9 +13,9 @@ router.use(branchScope);
 
 router.post('/', requireRole('owner', 'branch_manager'), EmployeesController.create);
 router.get('/next-code', requireRole('owner', 'branch_manager'), EmployeesController.getNextCode);
-router.get('/search', requireRole('owner', 'branch_manager'), EmployeesController.search);
-router.get('/', requireRole('owner', 'branch_manager'), EmployeesController.list);
-router.get('/:id', requireRole('owner', 'branch_manager'), EmployeesController.getById);
+router.get('/search', requireRole('owner', 'branch_manager', 'admin'), EmployeesController.search);
+router.get('/', requireRole('owner', 'branch_manager', 'admin'), EmployeesController.list);
+router.get('/:id', requireRole('owner', 'branch_manager', 'admin'), EmployeesController.getById);
 router.put('/:id', requireRole('owner', 'branch_manager'), EmployeesController.update);
 router.delete('/:id', requireRole('owner'), EmployeesController.remove);
 

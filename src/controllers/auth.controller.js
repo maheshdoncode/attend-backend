@@ -68,17 +68,22 @@ export class AuthController {
       let primaryBranchId = null;
       let primaryBranchLunchMode = null;
 
-      if (user.role === 'branch_manager') {
+      if (user.role === 'branch_manager' || user.role === 'admin') {
         const { data: bmBranches } = await supabase
           .from('branch_managers')
           .select('branch_id, branches(lunch_tracking_mode)')
           .eq('user_id', user.id);
 
-        if (bmBranches) {
-          branchIds = bmBranches.map((b) => b.branch_id);
-          primaryBranchId = branchIds[0] || null;
-          primaryBranchLunchMode = bmBranches[0]?.branches?.lunch_tracking_mode || null;
-        }
+        const { data: assignments } = await supabase
+          .from('branch_employee_assignments')
+          .select('branch_id, branches(lunch_tracking_mode)')
+          .eq('employee_id', user.id);
+
+        const allItems = [...(bmBranches || []), ...(assignments || [])];
+        const uniqueIds = Array.from(new Set(allItems.map((a) => a.branch_id).filter(Boolean)));
+        branchIds = uniqueIds;
+        primaryBranchId = branchIds[0] || null;
+        primaryBranchLunchMode = allItems[0]?.branches?.lunch_tracking_mode || null;
       } else if (user.role === 'employee') {
         const { data: assignments } = await supabase
           .from('branch_employee_assignments')
@@ -163,7 +168,7 @@ export class AuthController {
       let schedule = null;
       let shift_assignments = [];
 
-      if (user.role === 'employee' || user.role === 'branch_manager') {
+      if (user.role === 'employee' || user.role === 'branch_manager' || user.role === 'admin') {
         const { data: empProfile } = await supabase
           .from('employee_profiles')
           .select('*')
@@ -175,15 +180,27 @@ export class AuthController {
           profile = profileWithoutSalary;
         }
 
-        if (user.role === 'employee') {
+        if (user.role === 'employee' || user.role === 'admin' || user.role === 'branch_manager') {
           const { data: assignments } = await supabase
             .from('branch_employee_assignments')
             .select('branch_id, branches(*)')
             .eq('employee_id', userId);
 
-          if (assignments) {
-            branches = assignments.map((a) => a.branches).filter(Boolean);
-          }
+          const { data: bmBranches } = await supabase
+            .from('branch_managers')
+            .select('branch_id, branches(*)')
+            .eq('user_id', userId);
+
+          const allBranchObjects = [
+            ...(assignments || []).map((a) => a.branches),
+            ...(bmBranches || []).map((b) => b.branches),
+          ].filter(Boolean);
+
+          const branchMap = new Map();
+          allBranchObjects.forEach((b) => {
+            if (b && b.id) branchMap.set(b.id, b);
+          });
+          branches = Array.from(branchMap.values());
 
           schedule = await getEmployeeSchedule(userId);
           const rawSchedules = await getEmployeeSchedules(userId);
@@ -192,18 +209,10 @@ export class AuthController {
             schedule_id: a.schedule_id,
             schedule: a.schedule,
           }));
-        } else if (user.role === 'branch_manager') {
-          const { data: bmBranches } = await supabase
-            .from('branch_managers')
-            .select('branch_id, branches(*)')
-            .eq('user_id', userId);
-
-          if (bmBranches) {
-            branches = bmBranches.map((b) => b.branches).filter(Boolean);
-          }
         }
       }
 
+      const branchIds = branches.map((b) => b.id);
       const isLunchTrackingEnabled = await resolveLunchTrackingEnabled({
         userLunchMode: user.lunch_tracking_mode,
         branchId: branches?.[0]?.id,
@@ -214,6 +223,7 @@ export class AuthController {
         success: true,
         user: {
           ...user,
+          branchIds,
           lunch_tracking_mode: user.lunch_tracking_mode || 'inherit',
           is_lunch_tracking_enabled: isLunchTrackingEnabled,
           profile,

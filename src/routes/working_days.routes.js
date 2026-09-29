@@ -9,8 +9,8 @@ const router = Router();
 router.use(auth);
 router.use(branchScope);
 
-router.post('/', requireRole('owner'), WorkingDaysController.create);
-router.get('/', requireRole('owner', 'branch_manager', 'employee'), WorkingDaysController.list);
-router.delete('/:id', requireRole('owner'), WorkingDaysController.remove);
+router.post('/', requireRole('owner', 'branch_manager', 'admin'), WorkingDaysController.create);
+router.get('/', requireRole('owner', 'branch_manager', 'admin', 'employee'), WorkingDaysController.list);
+router.delete('/:id', requireRole('owner', 'branch_manager', 'admin'), WorkingDaysController.remove);
 
 export default router;

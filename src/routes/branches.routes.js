@@ -10,8 +10,8 @@ router.use(auth);
 router.use(branchScope);
 
 router.post('/', requireRole('owner'), BranchesController.create);
-router.get('/', requireRole('owner', 'branch_manager'), BranchesController.list);
-router.get('/:id', requireRole('owner', 'branch_manager'), BranchesController.getById);
+router.get('/', requireRole('owner', 'branch_manager', 'admin'), BranchesController.list);
+router.get('/:id', requireRole('owner', 'branch_manager', 'admin'), BranchesController.getById);
 router.put('/:id', requireRole('owner'), BranchesController.update);
 router.delete('/:id', requireRole('owner'), BranchesController.remove);
 

@@ -59,81 +59,228 @@ function categorizeDeductions(deductions = [], totalDeduction = 0, advanceDeduct
 
 /**
  * Generates an Excel workbook buffer for monthly employee attendance.
+ * Supports shift-based sheets (one worksheet per shift) or standard single sheet.
  */
-export const generateAttendanceExcel = async (employees, month, year) => {
+export const generateAttendanceExcel = async (data, month, year) => {
   const workbook = new ExcelJS.Workbook();
-  const worksheet = workbook.addWorksheet(`Attendance_${month}_${year}`);
-
   const daysInMonth = new Date(year, month, 0).getDate();
-
-  // Define Columns
-  const columns = [
-    { header: 'Employee Name', key: 'name', width: 25 },
-    { header: 'Employee Code', key: 'code', width: 15 },
-    { header: 'Department', key: 'department', width: 20 },
-  ];
-
-  for (let d = 1; d <= daysInMonth; d++) {
-    columns.push({ header: `${d}`, key: `day_${d}`, width: 6 });
-  }
-
-  worksheet.columns = columns;
-
-  // Header styling
-  worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  worksheet.getRow(1).fill = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: { argb: 'FF1E293B' },
-  };
-  worksheet.getRow(1).alignment = { horizontal: 'center', vertical: 'middle' };
-  worksheet.getRow(1).height = 28;
+  const monthName = new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' });
 
   // Status symbols mapping
-  const statusSymbols = {
-    present: 'P',
-    absent: 'A',
-    late: 'L',
-    holiday: 'H',
-    half_day: 'HD',
-    half_day_late: 'HD/L',
+  const resolveStatusSymbol = (dayRecord) => {
+    if (!dayRecord) return '-';
+    const rawStatus = String(dayRecord.status || '').toLowerCase();
+    const isLate = Boolean(dayRecord.is_late) || rawStatus === 'late' || (dayRecord.flag_reason && String(dayRecord.flag_reason).toLowerCase().includes('late'));
+    const isHalfDay = Boolean(dayRecord.is_half_day) || rawStatus === 'half_day';
+
+    if (rawStatus === 'half_day_late' || (isHalfDay && isLate)) {
+      return 'H·L';
+    }
+    if (isHalfDay) return 'H';
+    if (isLate) return 'L';
+    if (rawStatus === 'present' || dayRecord.is_present) return 'P';
+    if (rawStatus === 'absent') return 'A';
+    if (rawStatus === 'holiday' || dayRecord.is_holiday || rawStatus === 'off') return 'OFF';
+
+    // Check if the date is a Sunday
+    if (dayRecord.date && (rawStatus === 'not_marked' || rawStatus === '-' || !rawStatus)) {
+      const parts = dayRecord.date.split('-');
+      if (parts.length === 3) {
+        const dObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+        if (dObj.getDay() === 0 && !dayRecord.is_special_working_day) {
+          return 'OFF';
+        }
+      }
+    }
+    return '-';
   };
 
-  // Add Employee Rows
-  employees.forEach((emp) => {
-    const rowData = {
-      name: emp.name,
-      code: emp.employee_code || '-',
-      department: emp.department || '-',
+  const populateSheet = (worksheet, employeesList, shiftTitle) => {
+    // 1. Title Banner Row (Row 1)
+    const titleRow = worksheet.addRow([`ATTENDY HRM — ATTENDANCE MATRIX (${monthName.toUpperCase()} ${year}) · Shift: ${shiftTitle || 'All Shifts'}`]);
+    titleRow.height = 28;
+    titleRow.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 12 };
+    titleRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF0F172A' },
     };
+    titleRow.alignment = { horizontal: 'left', vertical: 'middle' };
 
+    // 2. Legend Row (Row 2)
+    const legendRow = worksheet.addRow([
+      'Legend:   [ P ] Present   |   [ L ] Late   |   [ H ] Half Day   |   [ H·L ] Half Day + Late   |   [ A ] Absent   |   [ OFF ] Holiday / Sunday Off   |   [ - ] Not Marked'
+    ]);
+    legendRow.height = 22;
+    legendRow.font = { bold: true, color: { argb: 'FF334155' }, size: 9 };
+    legendRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFF1F5F9' },
+    };
+    legendRow.alignment = { horizontal: 'left', vertical: 'middle' };
+
+    // Row 3: Spacer
+    const spacerRow = worksheet.addRow([]);
+    spacerRow.height = 8;
+
+    // 3. Table Header Row (Row 4)
+    const headerCols = ['Employee Name', 'Employee Code', 'Department'];
     for (let d = 1; d <= daysInMonth; d++) {
-      rowData[`day_${d}`] = '-';
+      headerCols.push(`${d}`);
     }
+    headerCols.push('Total Present', 'Total Late', 'Total Half Day', 'Total Absent');
 
-    if (Array.isArray(emp.days)) {
-      emp.days.forEach((dayRecord) => {
-        const dateObj = new Date(dayRecord.date);
-        const dayNum = dateObj.getDate();
-        const symbol = statusSymbols[dayRecord.status] || dayRecord.status || '-';
-        rowData[`day_${dayNum}`] = symbol;
-      });
-    }
+    const headerRow = worksheet.addRow(headerCols);
+    headerRow.height = 26;
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF1E293B' },
+    };
+    headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
 
-    const row = worksheet.addRow(rowData);
+    // Merge Title & Legend across total columns
+    const totalColumnsCount = headerCols.length;
+    worksheet.mergeCells(1, 1, 1, totalColumnsCount);
+    worksheet.mergeCells(2, 1, 2, totalColumnsCount);
 
-    // Center align status days
+    // Set Column Widths
+    worksheet.getColumn(1).width = 24; // Name
+    worksheet.getColumn(2).width = 15; // Code
+    worksheet.getColumn(3).width = 18; // Dept
     for (let d = 1; d <= daysInMonth; d++) {
-      const cell = row.getCell(`day_${d}`);
-      cell.alignment = { horizontal: 'center' };
-      if (cell.value === 'P') cell.font = { color: { argb: 'FF059669' }, bold: true };
-      else if (cell.value === 'A') cell.font = { color: { argb: 'FFDC2626' }, bold: true };
-      else if (cell.value === 'L') cell.font = { color: { argb: 'FFD97706' }, bold: true };
-      else if (cell.value === 'HD') cell.font = { color: { argb: 'FFF97316' }, bold: true };
-      else if (cell.value === 'HD/L') cell.font = { color: { argb: 'FFEA580C' }, bold: true };
-      else if (cell.value === 'H' || cell.value === 'OFF') cell.font = { color: { argb: 'FF2563EB' }, bold: true };
+      worksheet.getColumn(3 + d).width = 6;
     }
-  });
+    worksheet.getColumn(3 + daysInMonth + 1).width = 13; // Total Present
+    worksheet.getColumn(3 + daysInMonth + 2).width = 12; // Total Late
+    worksheet.getColumn(3 + daysInMonth + 3).width = 14; // Total Half Day
+    worksheet.getColumn(3 + daysInMonth + 4).width = 13; // Total Absent
+
+    // 4. Employee Data Rows
+    (employeesList || []).forEach((emp, empIdx) => {
+      const daysArr = Array.isArray(emp.days)
+        ? emp.days
+        : Array.isArray(emp.days?.dayList)
+        ? emp.days.dayList
+        : [];
+
+      const daysMap = emp.days_map || {};
+
+      let countPresent = 0;
+      let countLate = 0;
+      let countHalfDay = 0;
+      let countAbsent = 0;
+
+      const rowValues = [
+        emp.name || emp.employee_name || 'Unknown',
+        emp.employee_code || '-',
+        emp.department || 'General',
+      ];
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateSuffix = String(d).padStart(2, '0');
+        const dayRecord =
+          daysArr.find((dr) => {
+            if (!dr.date) return false;
+            const parts = dr.date.split('-');
+            return parseInt(parts[2], 10) === d;
+          }) ||
+          daysMap[dateSuffix] ||
+          daysMap[d] ||
+          daysArr[d - 1];
+
+        const symbol = resolveStatusSymbol(dayRecord);
+        rowValues.push(symbol);
+
+        if (['P', 'L', 'H', 'H·L', 'H.L', 'HD', 'HD/L'].includes(symbol)) {
+          countPresent++;
+        }
+        if (['L', 'H·L', 'H.L', 'HD/L'].includes(symbol)) {
+          countLate++;
+        }
+        if (['H', 'HD', 'H·L', 'H.L', 'HD/L'].includes(symbol)) {
+          countHalfDay++;
+        }
+        if (symbol === 'A') {
+          countAbsent++;
+        }
+      }
+
+      rowValues.push(countPresent, countLate, countHalfDay, countAbsent);
+
+      const row = worksheet.addRow(rowValues);
+      row.height = 22;
+
+      if (empIdx % 2 === 1) {
+        row.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFF8FAFC' },
+        };
+      }
+
+      row.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
+      row.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+      row.getCell(3).alignment = { horizontal: 'left', vertical: 'middle' };
+
+      // Colorize day cells
+      for (let d = 1; d <= daysInMonth; d++) {
+        const cell = row.getCell(3 + d);
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        const val = String(cell.value || '');
+
+        if (val === 'P') {
+          cell.font = { color: { argb: 'FF059669' }, bold: true };
+        } else if (val === 'L') {
+          cell.font = { color: { argb: 'FFD97706' }, bold: true };
+        } else if (val === 'H' || val === 'HD') {
+          cell.font = { color: { argb: 'FFF97316' }, bold: true };
+        } else if (val === 'H·L' || val === 'H.L' || val === 'HD/L') {
+          cell.font = { color: { argb: 'FFEA580C' }, bold: true };
+        } else if (val === 'A') {
+          cell.font = { color: { argb: 'FFDC2626' }, bold: true };
+        } else if (val === 'OFF' || val === 'H') {
+          cell.font = { color: { argb: 'FF2563EB' }, bold: true };
+        } else {
+          cell.font = { color: { argb: 'FF94A3B8' } };
+        }
+      }
+
+      // Format summary count columns
+      const pCell = row.getCell(3 + daysInMonth + 1);
+      pCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      pCell.font = { color: { argb: 'FF059669' }, bold: true };
+
+      const lCell = row.getCell(3 + daysInMonth + 2);
+      lCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      lCell.font = { color: { argb: 'FFD97706' }, bold: true };
+
+      const hCell = row.getCell(3 + daysInMonth + 3);
+      hCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      hCell.font = { color: { argb: 'FFF97316' }, bold: true };
+
+      const aCell = row.getCell(3 + daysInMonth + 4);
+      aCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      aCell.font = { color: { argb: 'FFDC2626' }, bold: true };
+    });
+  };
+
+  const shifts = Array.isArray(data?.shifts) ? data.shifts : (Array.isArray(data) && data[0]?.employees ? data : null);
+
+  if (shifts && shifts.length > 0) {
+    shifts.forEach((shift) => {
+      const cleanName = (shift.schedule_name || 'Shift').replace(/[:\\/?*\[\]]/g, '_').slice(0, 28);
+      const sheetName = `${cleanName}`;
+      const worksheet = workbook.addWorksheet(sheetName);
+      populateSheet(worksheet, shift.employees || [], shift.schedule_name);
+    });
+  } else {
+    const employees = Array.isArray(data) ? data : (data?.employees || []);
+    const worksheet = workbook.addWorksheet(`Attendance_${month}_${year}`);
+    populateSheet(worksheet, employees, `Attendance ${month}/${year}`);
+  }
 
   return await workbook.xlsx.writeBuffer();
 };

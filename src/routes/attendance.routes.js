@@ -20,13 +20,13 @@ router.post('/lunch-start', requireRole('employee', 'branch_manager'), Attendanc
 router.post('/lunch-end', requireRole('employee', 'branch_manager'), AttendanceController.endLunch);
 router.get('/my', requireRole('employee', 'branch_manager'), AttendanceController.myAttendance);
 
-// Manager / Owner actions
-router.get('/', requireRole('owner', 'branch_manager'), AttendanceController.list);
-router.get('/daily-summary', requireRole('owner', 'branch_manager'), AttendanceController.getDailySummary);
-router.get('/daily-roster', requireRole('owner', 'branch_manager'), AttendanceController.getDailyRoster);
-router.get('/daily-status', requireRole('owner', 'branch_manager'), AttendanceController.getDailyStatus);
-router.put('/:id/resolve', requireRole('owner', 'branch_manager'), AttendanceController.resolve);
-router.post('/manual', requireRole('owner', 'branch_manager'), AttendanceController.manualPunch);
-router.delete('/:id', requireRole('owner', 'branch_manager'), AttendanceController.deleteAttendance);
+// Manager / Owner / Admin actions
+router.get('/', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.list);
+router.get('/daily-summary', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.getDailySummary);
+router.get('/daily-roster', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.getDailyRoster);
+router.get('/daily-status', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.getDailyStatus);
+router.put('/:id/resolve', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.resolve);
+router.post('/manual', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.manualPunch);
+router.delete('/:id', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.deleteAttendance);
 
 export default router;

@@ -99,12 +99,12 @@ export class EmployeesController {
         });
       }
 
-      if (role !== 'employee' && role !== 'branch_manager') {
+      if (role !== 'employee' && role !== 'branch_manager' && role !== 'admin') {
         return res.status(400).json({
           success: false,
           error: {
             code: 'INVALID_ROLE',
-            message: "Role must be 'employee' or 'branch_manager'",
+            message: "Role must be 'employee', 'branch_manager', or 'admin'",
           },
         });
       }
@@ -274,7 +274,8 @@ export class EmployeesController {
    */
   static async search(req, res) {
     try {
-      const { q, query: queryParam, search, branch_id, role, is_active = 'true', limit = 20 } = req.query;
+      const { q, query: queryParam, search, branch_id: rawBranchId, role, is_active = 'true', limit = 20 } = req.query;
+      const branch_id = Array.isArray(rawBranchId) ? rawBranchId[0] : (rawBranchId && rawBranchId !== 'all' ? rawBranchId : null);
       const term = (q || queryParam || search || '').trim();
       const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
 
@@ -426,7 +427,8 @@ export class EmployeesController {
    */
   static async list(req, res) {
     try {
-      const { branch_id, role, search, is_active, page = 1, limit = 20 } = req.query;
+      const { branch_id: rawBranchId, role, search, is_active, page = 1, limit = 20 } = req.query;
+      const branch_id = Array.isArray(rawBranchId) ? rawBranchId[0] : (rawBranchId && rawBranchId !== 'all' ? rawBranchId : null);
       const pageNum = Math.max(1, parseInt(page, 10));
       const limitNum = Math.min(1000, Math.max(1, parseInt(limit, 10)));
       const offset = (pageNum - 1) * limitNum;
@@ -898,6 +900,7 @@ export class EmployeesController {
       const { id } = req.params;
       const {
         name,
+        role,
         department,
         monthly_salary,
         joined_date,
@@ -928,10 +931,15 @@ export class EmployeesController {
         });
       }
 
-      // 2. Update users table if name provided, or is_active provided by owner
+      // 2. Update users table if name, lunch_tracking_mode, role, or is_active provided
       const userUpdates = {};
       if (name !== undefined) userUpdates.name = name;
       if (lunch_tracking_mode !== undefined) userUpdates.lunch_tracking_mode = lunch_tracking_mode;
+      if (role !== undefined && req.user.role === 'owner') {
+        if (['employee', 'branch_manager', 'admin'].includes(role)) {
+          userUpdates.role = role;
+        }
+      }
       if (is_active !== undefined && req.user.role === 'owner') {
         userUpdates.is_active = Boolean(is_active);
       }
@@ -943,6 +951,8 @@ export class EmployeesController {
           throw new Error(`Failed to update user profile: ${userUpdateErr.message}`);
         }
       }
+
+      const effectiveRole = userUpdates.role || user.role;
 
       // 3. Update employee_profiles table
       const profileUpdates = {};
@@ -961,7 +971,7 @@ export class EmployeesController {
           .upsert({ user_id: id, ...profileUpdates }, { onConflict: 'user_id' });
       }
 
-      // 4. Sync branch assignments if branch_ids provided
+      // 4. Sync branch assignments & branch_managers if branch_ids provided or role changed
       if (Array.isArray(branch_ids)) {
         if (req.user.role === 'branch_manager') {
           const allowed = req.scopedBranchIds || [];
@@ -977,7 +987,7 @@ export class EmployeesController {
           }
         }
 
-        // Delete existing and insert new
+        // Delete existing and insert new for employee branch assignments
         await supabase
           .from('branch_employee_assignments')
           .delete()
@@ -989,6 +999,32 @@ export class EmployeesController {
             branch_id: bId,
           }));
           await supabase.from('branch_employee_assignments').insert(newAssignments);
+        }
+
+        // Sync branch_managers table based on effectiveRole
+        await supabase.from('branch_managers').delete().eq('user_id', id);
+        if (effectiveRole === 'branch_manager' && branch_ids.length > 0) {
+          const managerAssignments = branch_ids.map((bId) => ({
+            user_id: id,
+            branch_id: bId,
+          }));
+          await supabase.from('branch_managers').insert(managerAssignments);
+        }
+      } else if (userUpdates.role !== undefined) {
+        // If role changed but branch_ids was omitted, sync branch_managers table with existing branches
+        await supabase.from('branch_managers').delete().eq('user_id', id);
+        if (effectiveRole === 'branch_manager') {
+          const { data: existingBranches } = await supabase
+            .from('branch_employee_assignments')
+            .select('branch_id')
+            .eq('employee_id', id);
+          if (existingBranches && existingBranches.length > 0) {
+            const managerAssignments = existingBranches.map((b) => ({
+              user_id: id,
+              branch_id: b.branch_id,
+            }));
+            await supabase.from('branch_managers').insert(managerAssignments);
+          }
         }
       }
 

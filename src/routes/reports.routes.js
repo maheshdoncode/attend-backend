@@ -9,8 +9,8 @@ const router = Router();
 router.use(auth);
 router.use(branchScope);
 
-router.get('/attendance', requireRole('owner', 'branch_manager'), ReportsController.getAttendanceReport);
+router.get('/attendance', requireRole('owner', 'branch_manager', 'admin'), ReportsController.getAttendanceReport);
 router.get('/payroll', requireRole('owner'), ReportsController.getPayrollReport);
-router.get('/export', requireRole('owner', 'branch_manager'), ReportsController.exportReport);
+router.get('/export', requireRole('owner', 'branch_manager', 'admin'), ReportsController.exportReport);
 
 export default router;

@@ -10,7 +10,7 @@ router.use(auth);
 router.use(branchScope);
 
 router.post('/', requireRole('owner'), SchedulesController.create);
-router.get('/', requireRole('owner', 'branch_manager', 'employee'), SchedulesController.list);
+router.get('/', requireRole('owner', 'branch_manager', 'admin', 'employee'), SchedulesController.list);
 router.put('/:id', requireRole('owner'), SchedulesController.update);
 router.delete('/:id', requireRole('owner'), SchedulesController.remove);
 

@@ -225,8 +225,8 @@ export class AttendanceController {
           { count: 'exact' }
         );
 
-      // Branch Manager scoping
-      if (req.user.role === 'branch_manager') {
+      // Branch Manager & Admin scoping
+      if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
         const scopedIds = req.scopedBranchIds || [];
         if (scopedIds.length === 0) {
           return res.status(200).json({
@@ -457,8 +457,8 @@ export class AttendanceController {
         });
       }
 
-      // Branch Manager check
-      if (req.user.role === 'branch_manager') {
+      // Branch Manager & Admin check
+      if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
         const scopedIds = req.scopedBranchIds || [];
         if (!scopedIds.includes(record.branch_id)) {
           return res.status(403).json({
@@ -531,7 +531,7 @@ export class AttendanceController {
             branch_id
           )
         `)
-        .in('role', ['employee', 'branch_manager'])
+        .in('role', ['employee', 'branch_manager', 'admin'])
         .eq('is_active', true);
 
       const { data: rawEmployees, error: empErr } = await query;
@@ -556,7 +556,7 @@ export class AttendanceController {
         employees = employees.filter((e) => e.branch_ids.includes(branch_id));
       }
 
-      if (req.user.role === 'branch_manager') {
+      if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
         const scopedIds = new Set(req.scopedBranchIds || []);
         employees = employees.filter((e) => e.branch_ids.some((bId) => scopedIds.has(bId)));
       }
@@ -688,7 +688,7 @@ export class AttendanceController {
             )
           )
         `)
-        .in('role', ['employee', 'branch_manager'])
+        .in('role', ['employee', 'branch_manager', 'admin'])
         .eq('is_active', true);
 
       if (search) {
@@ -736,7 +736,7 @@ export class AttendanceController {
         employees = employees.filter((e) => e.branch_ids.includes(branch_id));
       }
 
-      if (req.user.role === 'branch_manager') {
+      if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
         const scopedIds = new Set(req.scopedBranchIds || []);
         employees = employees.filter((e) => e.branch_ids.some((bId) => scopedIds.has(bId)));
       }
@@ -899,7 +899,7 @@ export class AttendanceController {
             )
           )
         `)
-        .in('role', ['employee', 'branch_manager'])
+        .in('role', ['employee', 'branch_manager', 'admin'])
         .eq('is_active', true);
 
       if (search) {
@@ -950,8 +950,8 @@ export class AttendanceController {
         employees = employees.filter((e) => e.branch_ids.includes(branch_id));
       }
 
-      // Filter by branch_manager scope if applicable
-      if (req.user.role === 'branch_manager') {
+      // Filter by branch_manager / admin scope if applicable
+      if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
         const scopedIds = new Set(req.scopedBranchIds || []);
         employees = employees.filter((e) => e.branch_ids.some((bId) => scopedIds.has(bId)));
       }
@@ -1298,10 +1298,22 @@ export class AttendanceController {
         });
       }
 
-      // 2. Branch Manager scoping check
-      if (req.user.role === 'branch_manager') {
-        const scopedIds = req.scopedBranchIds || [];
-        if (!scopedIds.includes(attendance.branch_id)) {
+      // 2. Branch Manager / Admin scoping check
+      if (req.user.role === 'branch_manager' || req.user.role === 'admin') {
+        let allowedBranchIds = Array.isArray(req.user.branchIds) && req.user.branchIds.length > 0
+          ? req.user.branchIds
+          : (req.scopedBranchIds || []);
+
+        if (allowedBranchIds.length === 0) {
+          const { data: bm } = await supabase.from('branch_managers').select('branch_id').eq('user_id', req.user.id);
+          const { data: bea } = await supabase.from('branch_employee_assignments').select('branch_id').eq('employee_id', req.user.id);
+          allowedBranchIds = Array.from(new Set([
+            ...(bm || []).map((b) => b.branch_id),
+            ...(bea || []).map((b) => b.branch_id),
+          ])).filter(Boolean);
+        }
+
+        if (attendance.branch_id && !allowedBranchIds.includes(attendance.branch_id)) {
           return res.status(403).json({
             success: false,
             error: {

@@ -479,6 +479,45 @@ export async function pruneOldDriveBackups(drive, folderId, keepCount = MAX_BACK
 }
 
 /**
+ * Resolves or auto-creates the backups folder in Google Drive
+ */
+export async function resolveBackupFolder(drive, targetFolderId) {
+  if (targetFolderId) {
+    try {
+      const res = await drive.files.get({ fileId: targetFolderId.trim(), fields: 'id, name, trashed' });
+      if (res.data && !res.data.trashed) {
+        return res.data.id;
+      }
+    } catch (err) {
+      console.warn(`[BACKUP FOLDER] Specified folder ID (${targetFolderId}) not accessible (${err.message}). Resolving 'backups' folder...`);
+    }
+  }
+
+  try {
+    const list = await drive.files.list({
+      q: "name = 'backups' and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+      fields: 'files(id, name)',
+      pageSize: 1
+    });
+    if (list.data.files && list.data.files.length > 0) {
+      return list.data.files[0].id;
+    }
+
+    const created = await drive.files.create({
+      requestBody: {
+        name: 'backups',
+        mimeType: 'application/vnd.google-apps.folder'
+      },
+      fields: 'id'
+    });
+    return created.data.id;
+  } catch (createErr) {
+    console.warn('[BACKUP FOLDER] Could not search/create backups folder, uploading to root:', createErr.message);
+    return null;
+  }
+}
+
+/**
  * Main Backup Orchestration Function
  * - Generates filename: backup_YYYY-MM-DD_HH-mm-ss.sql
  * - Executes database dump (pg_dump or Node PostgreSQL engine)
@@ -493,10 +532,7 @@ export async function runBackup() {
     throw new Error('SUPABASE_DB_URL is not set in environment variables');
   }
 
-  const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
-  if (!folderId) {
-    throw new Error('GOOGLE_DRIVE_FOLDER_ID is not set in environment variables');
-  }
+  const rawFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
 
   const backupDir = path.resolve(process.cwd(), process.env.BACKUP_DIR || './backups');
   ensureDirectoryExists(backupDir);
@@ -525,13 +561,18 @@ export async function runBackup() {
     // 2. Initialize Google Drive client
     const drive = getGoogleDriveClient();
 
+    // Resolve folder
+    const folderId = await resolveBackupFolder(drive, rawFolderId);
+
     // 3. Upload to Google Drive
     const driveFile = await uploadFileToDrive(drive, localFilePath, filename, folderId);
     driveFileId = driveFile.id;
     console.log(`[DATABASE BACKUP] Uploaded to Google Drive successfully! File ID: ${driveFileId}`);
 
     // 4. Prune old backups (Keep last 7)
-    prunedCount = await pruneOldDriveBackups(drive, folderId, MAX_BACKUP_RETENTION);
+    if (folderId) {
+      prunedCount = await pruneOldDriveBackups(drive, folderId, MAX_BACKUP_RETENTION);
+    }
 
     // 5. Clean up local temporary file after successful Drive upload
     try {
