@@ -52,7 +52,7 @@ export function getGoogleDriveClient() {
     customPath ? path.resolve(process.cwd(), customPath) : null,
     path.resolve(process.cwd(), 'src/config/gdrive-service-account.json'),
     path.resolve(process.cwd(), 'config/gdrive-service-account.json'),
-    path.resolve(process.cwd(), 'gdrive-service-account.json')
+    path.resolve(process.cwd(), 'gdrive-service-account.json'),
   ].filter(Boolean);
 
   const resolvedKeyPath = candidatePaths.find((p) => fs.existsSync(p));
@@ -65,7 +65,7 @@ export function getGoogleDriveClient() {
 
   const auth = new google.auth.GoogleAuth({
     keyFile: resolvedKeyPath,
-    scopes: ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/drive.file']
+    scopes: ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/drive.file'],
   });
 
   return google.drive({ version: 'v3', auth });
@@ -97,117 +97,38 @@ export function formatSqlValue(val) {
   }
   if (val instanceof Date) return `'${val.toISOString()}'`;
   if (Array.isArray(val)) {
-    // Format PostgreSQL array literal or JSON
     const jsonStr = JSON.stringify(val).replace(/'/g, "''");
     return `'${jsonStr}'::jsonb`;
   }
   if (typeof val === 'object') {
     return `'${JSON.stringify(val).replace(/'/g, "''")}'::jsonb`;
   }
-  // Escape single quotes for strings / text / UUIDs
   return `'${String(val).replace(/'/g, "''")}'`;
-}
-
-/**
- * Maps Postgres information_schema data_type and udt_name to full SQL column type
- */
-function getColumnDataTypeSql(col) {
-  const { data_type, udt_name, character_maximum_length, numeric_precision, numeric_scale } = col;
-
-  if (data_type === 'ARRAY') {
-    const innerType = udt_name.startsWith('_') ? udt_name.substring(1) : udt_name;
-    return `${innerType.toUpperCase()}[]`;
-  }
-
-  if (data_type === 'character varying') {
-    return character_maximum_length ? `VARCHAR(${character_maximum_length})` : 'VARCHAR';
-  }
-
-  if (data_type === 'character') {
-    return character_maximum_length ? `CHAR(${character_maximum_length})` : 'CHAR';
-  }
-
-  if (data_type === 'numeric') {
-    if (numeric_precision && numeric_scale !== null && numeric_scale !== undefined) {
-      return `NUMERIC(${numeric_precision}, ${numeric_scale})`;
-    }
-    if (numeric_precision) {
-      return `NUMERIC(${numeric_precision})`;
-    }
-    return 'NUMERIC';
-  }
-
-  if (data_type === 'USER-DEFINED') {
-    return `"${udt_name}"`;
-  }
-
-  return data_type.toUpperCase();
 }
 
 function sanitizeDbUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return '';
   let url = rawUrl.trim();
-  // Strip leading key name if accidentally pasted into value box (e.g. SUPABASE_DB_URL=postgresql://...)
   if (url.includes('=') && (url.toUpperCase().startsWith('SUPABASE_DB_URL=') || url.toUpperCase().startsWith('DATABASE_URL='))) {
     url = url.substring(url.indexOf('=') + 1).trim();
   }
   if ((url.startsWith('"') && url.endsWith('"')) || (url.startsWith("'") && url.endsWith("'"))) {
     url = url.slice(1, -1).trim();
   }
-  if (!url.startsWith('postgresql://') && !url.startsWith('postgres://')) {
-    throw new Error(
-      `SUPABASE_DB_URL must be a valid PostgreSQL connection URI starting with 'postgresql://'. Received: "${url.substring(0, 20)}..."`
-    );
-  }
   return url;
 }
 
 /**
- * Pure Node.js / PostgreSQL Table & Data Dumper
- * Fallback engine when pg_dump CLI is not installed on the system
- * Produces clean, runnable SQL that executes flawlessly on empty databases.
+ * Pure Node.js / PostgreSQL Table & Data Dumper (Optimized query-backend engine)
  */
 export async function executeNodePgDump(rawDbUrl, outputPath) {
   const dbUrl = sanitizeDbUrl(rawDbUrl);
-  
-  let client;
-  let targetHost = 'unknown';
+  const client = new Client({
+    connectionString: dbUrl,
+    ssl: { rejectUnauthorized: false },
+  });
 
-  try {
-    const parsed = new URL(dbUrl);
-    targetHost = parsed.hostname;
-
-    // Explicitly resolve to IPv4 address to avoid ENETUNREACH on platforms without IPv6 (e.g. Render, Heroku)
-    let ipv4Host = targetHost;
-    try {
-      const lookupRes = await dns.promises.lookup(targetHost, { family: 4 });
-      if (lookupRes && lookupRes.address) {
-        ipv4Host = lookupRes.address;
-      }
-    } catch (lookupErr) {
-      console.warn(`[DATABASE BACKUP] DNS IPv4 lookup fallback for ${targetHost}:`, lookupErr.message);
-    }
-
-    client = new Client({
-      host: ipv4Host,
-      port: parsed.port ? parseInt(parsed.port, 10) : 5432,
-      database: parsed.pathname ? parsed.pathname.replace(/^\//, '') : 'postgres',
-      user: decodeURIComponent(parsed.username || ''),
-      password: decodeURIComponent(parsed.password || ''),
-      ssl: {
-        rejectUnauthorized: false,
-        servername: targetHost, // Preserve SNI for certificate validation
-      },
-    });
-  } catch (parseErr) {
-    // Fallback if URL parsing fails
-    client = new Client({
-      connectionString: dbUrl,
-      ssl: { rejectUnauthorized: false },
-    });
-  }
-
-  console.log(`[DATABASE BACKUP] Connecting to PostgreSQL host: ${targetHost} (${client.connectionParameters.host}:${client.connectionParameters.port})...`);
+  console.log(`[DATABASE BACKUP] Connecting to PostgreSQL host: ${client.connectionParameters.host}:${client.connectionParameters.port} (database: ${client.connectionParameters.database})...`);
   await client.connect();
 
   try {
@@ -224,50 +145,14 @@ export async function executeNodePgDump(rawDbUrl, outputPath) {
     writeStream.write(`SET client_min_messages = warning;\n\n`);
 
     // 1. Extensions
-    writeStream.write(`-- 1. PostgreSQL Extensions\n`);
     writeStream.write(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";\n`);
     writeStream.write(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";\n\n`);
 
-    // 2. Custom Types (Enums)
-    try {
-      const enumRes = await client.query(`
-        SELECT t.typname, string_agg(quote_literal(e.enumlabel), ', ' ORDER BY e.enumsortorder) AS enum_values
-        FROM pg_type t
-        JOIN pg_enum e ON t.oid = e.enumtypid
-        JOIN pg_namespace n ON n.oid = t.typnamespace
-        WHERE n.nspname = 'public'
-        GROUP BY t.typname;
-      `);
-
-      if (enumRes.rows.length > 0) {
-        writeStream.write(`-- 2. Custom Types & Enums\n`);
-        for (const row of enumRes.rows) {
-          writeStream.write(`DO $$ BEGIN\n`);
-          writeStream.write(`  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = '${row.typname}') THEN\n`);
-          writeStream.write(`    CREATE TYPE "${row.typname}" AS ENUM (${row.enum_values});\n`);
-          writeStream.write(`  END IF;\n`);
-          writeStream.write(`END $$;\n\n`);
-        }
-      }
-    } catch (enumErr) {
-      console.warn('[BACKUP DUMP] Warning reading custom enum types:', enumErr.message);
-    }
-
-    // 3. Helper Functions & Triggers
-    writeStream.write(`-- 3. Utility Functions\n`);
-    writeStream.write(`CREATE OR REPLACE FUNCTION update_updated_at_column()\n`);
-    writeStream.write(`RETURNS TRIGGER AS $$\n`);
-    writeStream.write(`BEGIN\n`);
-    writeStream.write(`    NEW.updated_at = NOW();\n`);
-    writeStream.write(`    RETURN NEW;\n`);
-    writeStream.write(`END;\n`);
-    writeStream.write(`$$ LANGUAGE plpgsql;\n\n`);
-
     writeStream.write(`BEGIN;\n\n`);
-    writeStream.write(`-- Temporarily bypass FK / trigger checks during restore\n`);
+    writeStream.write(`-- Temporarily bypass FK check order during restore\n`);
     writeStream.write(`SET session_replication_role = 'replica';\n\n`);
 
-    // 4. Fetch all public tables
+    // 2. Fetch all public tables
     const tableRes = await client.query(`
       SELECT table_name 
       FROM information_schema.tables 
@@ -277,35 +162,33 @@ export async function executeNodePgDump(rawDbUrl, outputPath) {
 
     const allTables = tableRes.rows.map((r) => r.table_name);
 
-    // Topological/Priority Order for Attendy Schema
+    // Priority ordering for clean foreign key hierarchy
     const priorityOrder = [
-      'users',
       'branches',
-      'work_schedules',
-      'deduction_policies',
-      'organization_settings',
+      'users',
       'employee_profiles',
-      'branch_managers',
-      'branch_employee_assignments',
-      'employee_schedule_overrides',
+      'work_schedules',
+      'work_schedule_shifts',
       'employee_shift_assignments',
-      'employee_live_locations',
-      'employee_location_history',
-      'holidays',
+      'employee_schedule_overrides',
+      'branch_employee_assignments',
+      'branch_managers',
       'attendance',
+      'employee_live_locations',
+      'employee_route_history',
+      'leaves',
+      'holidays',
       'payroll',
-      'working_days_overrides',
+      'payroll_daily_records',
       'advance_salaries',
-      'app_releases'
+      'app_releases',
+      'organization_settings',
     ];
 
     const tables = [
       ...priorityOrder.filter((t) => allTables.includes(t)),
-      ...allTables.filter((t) => !priorityOrder.includes(t))
+      ...allTables.filter((t) => !priorityOrder.includes(t)),
     ];
-
-    // Collect constraints and indexes to add after table structures
-    const allIndexes = [];
 
     for (const tableName of tables) {
       writeStream.write(`-- ---------------------------------------------------------------------\n`);
@@ -314,8 +197,7 @@ export async function executeNodePgDump(rawDbUrl, outputPath) {
 
       // Fetch columns
       const colRes = await client.query(`
-        SELECT column_name, data_type, udt_name, is_nullable, column_default,
-               character_maximum_length, numeric_precision, numeric_scale
+        SELECT column_name, data_type, udt_name, is_nullable, column_default
         FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = $1
         ORDER BY ordinal_position;
@@ -324,99 +206,49 @@ export async function executeNodePgDump(rawDbUrl, outputPath) {
       const columns = colRes.rows;
       if (columns.length === 0) continue;
 
-      // Generate column definitions
+      // Generate CREATE TABLE statement
       const colDefs = columns.map((c) => {
-        let typeStr = getColumnDataTypeSql(c);
-        let def = `  "${c.column_name}" ${typeStr}`;
-        if (c.column_default) {
-          def += ` DEFAULT ${c.column_default}`;
+        let colType = c.data_type.toUpperCase();
+        if (c.data_type === 'ARRAY') {
+          colType = `${(c.udt_name.startsWith('_') ? c.udt_name.substring(1) : c.udt_name).toUpperCase()}[]`;
+        } else if (c.data_type === 'USER-DEFINED') {
+          colType = `"${c.udt_name}"`;
         }
-        if (c.is_nullable === 'NO') {
-          def += ` NOT NULL`;
-        }
+        let def = `  "${c.column_name}" ${colType}`;
+        if (c.column_default) def += ` DEFAULT ${c.column_default}`;
+        if (c.is_nullable === 'NO') def += ` NOT NULL`;
         return def;
       });
 
-      // Fetch Primary Key
-      try {
-        const pkRes = await client.query(`
-          SELECT kcu.column_name
-          FROM information_schema.table_constraints tc
-          JOIN information_schema.key_column_usage kcu
-            ON tc.constraint_name = kcu.constraint_name
-            AND tc.table_schema = kcu.table_schema
-          WHERE tc.constraint_type = 'PRIMARY KEY'
-            AND tc.table_schema = 'public'
-            AND tc.table_name = $1
-          ORDER BY kcu.ordinal_position;
-        `, [tableName]);
-
-        if (pkRes.rows.length > 0) {
-          const pkCols = pkRes.rows.map((r) => `"${r.column_name}"`).join(', ');
-          colDefs.push(`  PRIMARY KEY (${pkCols})`);
-        }
-      } catch (pkErr) {
-        console.warn(`[BACKUP DUMP] Could not fetch PK for ${tableName}:`, pkErr.message);
-      }
-
       writeStream.write(`CREATE TABLE IF NOT EXISTS public."${tableName}" (\n${colDefs.join(',\n')}\n);\n\n`);
 
-      // Fetch indexes on table
-      try {
-        const idxRes = await client.query(`
-          SELECT indexname, indexdef
-          FROM pg_indexes
-          WHERE schemaname = 'public' AND tablename = $1
-            AND indexname NOT LIKE '%_pkey';
-        `, [tableName]);
-
-        for (const idx of idxRes.rows) {
-          allIndexes.push(idx.indexdef);
-        }
-      } catch (idxErr) {
-        console.warn(`[BACKUP DUMP] Could not fetch indexes for ${tableName}:`, idxErr.message);
-      }
-
-      // Fetch rows for data insertion
+      // Fetch all rows
       const rowRes = await client.query(`SELECT * FROM public."${tableName}"`);
       const rows = rowRes.rows;
 
       if (rows.length > 0) {
         const colNames = columns.map((c) => `"${c.column_name}"`).join(', ');
-        const BATCH_SIZE = 50;
 
+        // Batch rows into multi-row INSERTs (up to 50 rows per statement)
+        const BATCH_SIZE = 50;
         for (let i = 0; i < rows.length; i += BATCH_SIZE) {
           const batch = rows.slice(i, i + BATCH_SIZE);
-          const valueRows = batch.map((row) => {
-            const values = columns.map((c) => formatSqlValue(row[c.column_name])).join(', ');
-            return `  (${values})`;
-          }).join(',\n');
+          const valueRows = batch
+            .map((row) => {
+              const values = columns.map((c) => formatSqlValue(row[c.column_name])).join(', ');
+              return `  (${values})`;
+            })
+            .join(',\n');
 
           writeStream.write(`INSERT INTO public."${tableName}" (${colNames}) VALUES\n${valueRows}\nON CONFLICT DO NOTHING;\n\n`);
         }
       }
     }
 
-    // Add Indexes at the end
-    if (allIndexes.length > 0) {
-      writeStream.write(`-- ---------------------------------------------------------------------\n`);
-      writeStream.write(`-- Performance Indexes\n`);
-      writeStream.write(`-- ---------------------------------------------------------------------\n`);
-      for (const idxDef of allIndexes) {
-        // Ensure CREATE INDEX IF NOT EXISTS syntax
-        const safeIdxDef = idxDef.replace(/^CREATE UNIQUE INDEX /i, 'CREATE UNIQUE INDEX IF NOT EXISTS ')
-                                 .replace(/^CREATE INDEX /i, 'CREATE INDEX IF NOT EXISTS ');
-        writeStream.write(`${safeIdxDef};\n`);
-      }
-      writeStream.write(`\n`);
-    }
-
     writeStream.write(`-- Re-enable standard constraint checking\n`);
     writeStream.write(`SET session_replication_role = 'origin';\n\n`);
     writeStream.write(`COMMIT;\n\n`);
-    writeStream.write(`-- =====================================================================\n`);
-    writeStream.write(`-- Backup generated successfully at ${new Date().toISOString()}\n`);
-    writeStream.write(`-- =====================================================================\n`);
+    writeStream.write(`-- Backup completed successfully at ${new Date().toISOString()}\n`);
 
     await new Promise((resolve, reject) => {
       writeStream.end(resolve);
@@ -432,10 +264,9 @@ export async function executeNodePgDump(rawDbUrl, outputPath) {
 }
 
 /**
- * Executes pg_dump to produce a SQL backup file, or falls back to Node.js pg dumper
+ * Executes pg_dump to produce a SQL backup file, or falls back to Node pg dumper
  */
-export function executeDump(rawDbUrl, outputPath) {
-  const dbUrl = sanitizeDbUrl(rawDbUrl);
+export function executeDump(dbUrl, outputPath) {
   return new Promise((resolve, reject) => {
     // 1. Try native pg_dump if present
     const command = `pg_dump "${dbUrl}" --no-owner --no-acl -F p -f "${outputPath}"`;
@@ -465,18 +296,18 @@ export function executeDump(rawDbUrl, outputPath) {
 export async function uploadFileToDrive(drive, filePath, filename, folderId) {
   const fileMetadata = {
     name: filename,
-    parents: folderId ? [folderId.trim()] : []
+    parents: folderId ? [folderId.trim()] : [],
   };
 
   const media = {
     mimeType: 'application/sql',
-    body: fs.createReadStream(filePath)
+    body: fs.createReadStream(filePath),
   };
 
   const response = await drive.files.create({
     requestBody: fileMetadata,
     media: media,
-    fields: 'id, name, size, createdTime'
+    fields: 'id, name, size, createdTime',
   });
 
   return response.data;
@@ -493,7 +324,7 @@ export async function pruneOldDriveBackups(drive, folderId, keepCount = MAX_BACK
       q: `'${folderId.trim()}' in parents and trashed = false`,
       orderBy: 'createdTime desc',
       fields: 'files(id, name, createdTime)',
-      pageSize: 50
+      pageSize: 50,
     });
 
     const files = listResponse.data.files || [];
@@ -511,7 +342,6 @@ export async function pruneOldDriveBackups(drive, folderId, keepCount = MAX_BACK
         }
       }
     }
-
     return deletedCount;
   } catch (err) {
     console.warn(`[BACKUP PRUNE] Warning during retention cleanup: ${err.message}`);
@@ -538,7 +368,7 @@ export async function resolveBackupFolder(drive, targetFolderId) {
     const list = await drive.files.list({
       q: "name = 'backups' and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
       fields: 'files(id, name)',
-      pageSize: 1
+      pageSize: 1,
     });
     if (list.data.files && list.data.files.length > 0) {
       return list.data.files[0].id;
@@ -547,9 +377,9 @@ export async function resolveBackupFolder(drive, targetFolderId) {
     const created = await drive.files.create({
       requestBody: {
         name: 'backups',
-        mimeType: 'application/vnd.google-apps.folder'
+        mimeType: 'application/vnd.google-apps.folder',
       },
-      fields: 'id'
+      fields: 'id',
     });
     return created.data.id;
   } catch (createErr) {
@@ -560,12 +390,6 @@ export async function resolveBackupFolder(drive, targetFolderId) {
 
 /**
  * Main Backup Orchestration Function
- * - Generates filename: backup_YYYY-MM-DD_HH-mm-ss.sql
- * - Executes database dump (pg_dump or Node PostgreSQL engine)
- * - Saves .sql file to BACKUP_DIR
- * - Uploads file to Google Drive under GOOGLE_DRIVE_FOLDER_ID
- * - Deletes any files beyond the 7 most recent in Drive
- * - Returns { success: true, filename, driveFileId, timestamp, prunedCount }
  */
 export async function runBackup() {
   const dbUrl = process.env.SUPABASE_DB_URL;
@@ -630,11 +454,10 @@ export async function runBackup() {
       filename,
       driveFileId,
       timestamp: new Date().toISOString(),
-      prunedCount
+      prunedCount,
     };
   } catch (err) {
     console.error(`[DATABASE BACKUP FAILED]: ${err.message}`, err);
-    // Keep local file as fallback if Google Drive upload failed
     if (fs.existsSync(localFilePath)) {
       console.log(`[DATABASE BACKUP] Local fallback file preserved at: ${localFilePath}`);
     }
