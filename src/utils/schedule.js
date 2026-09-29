@@ -1,5 +1,53 @@
 import { supabase } from '../db/supabase.js';
 
+export const TIMEZONE_IST = 'Asia/Kolkata';
+
+/**
+ * Returns today's date in YYYY-MM-DD in IST (Asia/Kolkata)
+ * @param {Date|string|number} [dateInput=new Date()]
+ * @returns {string}
+ */
+export const getTodayIST = (dateInput = new Date()) => {
+  const d = dateInput instanceof Date ? dateInput : new Date(dateInput);
+  if (isNaN(d.getTime())) {
+    return new Date().toISOString().split('T')[0];
+  }
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE_IST }).format(d);
+};
+
+/**
+ * Gets minutes from midnight in IST (Asia/Kolkata) from a Date object or ISO string.
+ * @param {Date|string} dateInput
+ * @returns {number}
+ */
+export const getMinutesFromMidnight = (dateInput) => {
+  if (!dateInput) return 0;
+  const d = dateInput instanceof Date ? dateInput : new Date(dateInput);
+  if (isNaN(d.getTime())) return 0;
+  try {
+    const timeStr = d.toLocaleTimeString('en-GB', {
+      timeZone: TIMEZONE_IST,
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const parts = timeStr.split(':').map(Number);
+    return (parts[0] || 0) * 60 + (parts[1] || 0);
+  } catch (e) {
+    const utcHours = d.getUTCHours();
+    const utcMins = d.getUTCMinutes();
+    return (utcHours * 60 + utcMins + 330) % 1440;
+  }
+};
+
+/**
+ * Returns current minutes from midnight in IST (Asia/Kolkata)
+ */
+export const getCurrentMinutesIST = (dateObj = new Date()) => {
+  return getMinutesFromMidnight(dateObj);
+};
+
 /**
  * Parses time string (e.g. '09:00:00' or '09:00') or schedule object into total minutes from midnight.
  * @param {string|object|Date|number} timeInput
@@ -9,7 +57,7 @@ export const parseTimeToMinutes = (timeInput) => {
   if (!timeInput) return 0;
   if (typeof timeInput === 'number') return timeInput;
   if (timeInput instanceof Date) {
-    return timeInput.getHours() * 60 + timeInput.getMinutes();
+    return getMinutesFromMidnight(timeInput);
   }
   if (typeof timeInput === 'object') {
     if (timeInput.start_time) return parseTimeToMinutes(timeInput.start_time);
@@ -22,29 +70,6 @@ export const parseTimeToMinutes = (timeInput) => {
   const hours = parts[0] || 0;
   const minutes = parts[1] || 0;
   return hours * 60 + minutes;
-};
-
-/**
- * Gets minutes from midnight from a Date object or ISO string.
- * @param {Date|string} dateInput
- * @returns {number}
- */
-export const getMinutesFromMidnight = (dateInput) => {
-  if (!dateInput) return 0;
-  const d = new Date(dateInput);
-  if (isNaN(d.getTime())) return 0;
-  try {
-    const timeStr = d.toLocaleTimeString('en-GB', {
-      timeZone: 'Asia/Kolkata',
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-    return parseTimeToMinutes(timeStr);
-  } catch (e) {
-    return d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
-  }
 };
 
 /**
@@ -263,6 +288,9 @@ export const getEmployeeActiveShift = async (employee_id, now = new Date(), toda
 };
 
 export default {
+  TIMEZONE_IST,
+  getTodayIST,
+  getCurrentMinutesIST,
   parseTimeToMinutes,
   getMinutesFromMidnight,
   getEmployeeSchedule,

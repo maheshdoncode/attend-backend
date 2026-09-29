@@ -10,6 +10,7 @@ import {
   computeLateMinutes,
   computeEarlyMinutes,
   isHalfDay,
+  getTodayIST,
 } from '../utils/schedule.js';
 
 export class AttendanceService {
@@ -18,7 +19,7 @@ export class AttendanceService {
    */
   static async clockIn(employeeId, { qr_payload, latitude, longitude, schedule_id }) {
     const now = new Date();
-    const today = now.toISOString().split('T')[0];
+    const today = getTodayIST(now);
 
     // 1. Parse QR payload and extract branch_id
     let parsedPayload;
@@ -234,7 +235,7 @@ export class AttendanceService {
    */
   static async clockOut(employeeId, { qr_payload, latitude, longitude }) {
     const now = new Date();
-    const today = now.toISOString().split('T')[0];
+    const today = getTodayIST(now);
 
     // 1. Parse QR payload
     let parsedPayload;
@@ -327,9 +328,8 @@ export class AttendanceService {
             isFlagged = true;
             flagReason = flagReason ? `${flagReason}, ${halfDayReason}` : halfDayReason;
           } else {
-            const currentMins = now.getHours() * 60 + now.getMinutes();
-            if (currentMins < shiftEndMins - 15) {
-              const earlyMins = shiftEndMins - currentMins;
+            const earlyMins = computeEarlyMinutes(now, schedule);
+            if (earlyMins > 15) {
               const earlyReason = `${earlyMins} min early departure`;
               isFlagged = true;
               flagReason = flagReason ? `${flagReason}, ${earlyReason}` : earlyReason;
@@ -370,7 +370,7 @@ export class AttendanceService {
    * Internal cron job for daily auto-flagging missing clock-outs and marking absent employees.
    */
   static async autoFlagDaily() {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayIST();
 
     // 1. Flag records with clock_in but missing clock_out
     const { data: unclosedRecords, error: unclosedErr } = await supabase
@@ -483,12 +483,7 @@ export class AttendanceService {
     }
 
     const now = time ? new Date(time) : new Date();
-    let today;
-    try {
-      today = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    } catch (e) {
-      today = now.toISOString().split('T')[0];
-    }
+    const today = getTodayIST(now);
 
     let effectiveBranchId = branch_id;
     if (!effectiveBranchId) {
@@ -714,7 +709,7 @@ export class AttendanceService {
    */
   static async startLunch(employeeId, { latitude, longitude }) {
     const now = new Date();
-    const today = now.toISOString().split('T')[0];
+    const today = getTodayIST(now);
 
     // 1. Find today's active attendance session
     const { data: attendance, error } = await supabase
@@ -779,7 +774,7 @@ export class AttendanceService {
    */
   static async endLunch(employeeId, { latitude, longitude }) {
     const now = new Date();
-    const today = now.toISOString().split('T')[0];
+    const today = getTodayIST(now);
 
     // 1. Find today's active attendance session where lunch_start_time is set but lunch_end_time is null
     const { data: attendance, error } = await supabase

@@ -1,6 +1,12 @@
 import { supabase } from '../db/supabase.js';
 import { AttendanceService } from '../services/attendance.service.js';
-import { parseTimeToMinutes, computeLateMinutes } from '../utils/schedule.js';
+import {
+  parseTimeToMinutes,
+  computeLateMinutes,
+  computeEarlyMinutes,
+  getTodayIST,
+  getCurrentMinutesIST,
+} from '../utils/schedule.js';
 
 export const resolveEmployeeAttendanceStatus = (att, schedule, targetDate) => {
   let explicitStatus = typeof att === 'string' ? att : att?.status;
@@ -23,16 +29,12 @@ export const resolveEmployeeAttendanceStatus = (att, schedule, targetDate) => {
     return explicitStatus;
   }
 
-  const now = new Date();
-  const todayYear = now.getFullYear();
-  const todayMonth = String(now.getMonth() + 1).padStart(2, '0');
-  const todayDay = String(now.getDate()).padStart(2, '0');
-  const todayStr = todayYear + '-' + todayMonth + '-' + todayDay;
+  const todayStr = getTodayIST();
 
   if (targetDate < todayStr) {
     return 'absent';
   } else if (targetDate === todayStr) {
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const currentMinutes = getCurrentMinutesIST();
     const endMinutes = parseTimeToMinutes(schedule?.end_time || '18:00:00');
     if (currentMinutes >= endMinutes) {
       return 'absent';
@@ -513,7 +515,7 @@ export class AttendanceController {
   static async getDailySummary(req, res) {
     try {
       const { date, branch_id } = req.query;
-      const targetDate = date || new Date().toISOString().split('T')[0];
+      const targetDate = date || getTodayIST();
 
       // 1. Fetch active employees & branch managers
       let query = supabase
@@ -656,7 +658,7 @@ export class AttendanceController {
   static async getDailyRoster(req, res) {
     try {
       const { date, branch_id, status, search } = req.query;
-      const targetDate = date || new Date().toISOString().split('T')[0];
+      const targetDate = date || getTodayIST();
 
       let query = supabase
         .from('users')
@@ -799,7 +801,7 @@ export class AttendanceController {
         let flagReason = att?.flag_reason || null;
 
         if (!isFlagged && att?.clock_in_time && empSchedule?.start_time) {
-          const lateMins = computeLateMinutes(new Date(att.clock_in_time), empSchedule);
+          const lateMins = computeLateMinutes(att.clock_in_time, empSchedule);
           if (lateMins > 0 || attStatus === 'late') {
             isFlagged = true;
             flagReason = flagReason || `Late arrival (${lateMins} min late)`;
@@ -807,11 +809,8 @@ export class AttendanceController {
         }
 
         if (att?.clock_out_time && empSchedule?.end_time) {
-          const shiftEndMins = parseTimeToMinutes(empSchedule.end_time);
-          const outDate = new Date(att.clock_out_time);
-          const outMins = outDate.getHours() * 60 + outDate.getMinutes();
-          if (outMins < shiftEndMins - 15) {
-            const earlyMins = shiftEndMins - outMins;
+          const earlyMins = computeEarlyMinutes(att.clock_out_time, empSchedule);
+          if (earlyMins > 15) {
             const earlyText = `${earlyMins} min early departure`;
             isFlagged = true;
             flagReason = flagReason ? (flagReason.includes('early') ? flagReason : `${flagReason}, ${earlyText}`) : earlyText;
@@ -866,7 +865,7 @@ export class AttendanceController {
   static async getDailyStatus(req, res) {
     try {
       const { date, branch_id, status, search } = req.query;
-      const targetDate = date || new Date().toISOString().split('T')[0];
+      const targetDate = date || getTodayIST();
 
       // 1. Fetch active employees & branch managers
       let query = supabase
@@ -1050,7 +1049,7 @@ export class AttendanceController {
           let flagReason = att?.flag_reason || null;
 
           if (!isFlagged && att?.clock_in_time && sch?.start_time) {
-            const lateMins = computeLateMinutes(new Date(att.clock_in_time), sch);
+            const lateMins = computeLateMinutes(att.clock_in_time, sch);
             if (lateMins > 0 || attStatus === 'late') {
               isFlagged = true;
               flagReason = flagReason || `Late arrival (${lateMins} min late)`;
@@ -1058,11 +1057,8 @@ export class AttendanceController {
           }
 
           if (att?.clock_out_time && sch?.end_time) {
-            const shiftEndMins = parseTimeToMinutes(sch.end_time);
-            const outDate = new Date(att.clock_out_time);
-            const outMins = outDate.getHours() * 60 + outDate.getMinutes();
-            if (outMins < shiftEndMins - 15) {
-              const earlyMins = shiftEndMins - outMins;
+            const earlyMins = computeEarlyMinutes(att.clock_out_time, sch);
+            if (earlyMins > 15) {
               const earlyText = `${earlyMins} min early departure`;
               isFlagged = true;
               flagReason = flagReason ? (flagReason.includes('early') ? flagReason : `${flagReason}, ${earlyText}`) : earlyText;
