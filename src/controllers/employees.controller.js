@@ -268,6 +268,45 @@ export class EmployeesController {
   }
 
   /**
+   * Helper: Get user IDs matching branch filter and manager scoping
+   */
+  static async getBranchFilteredUserIds(branchId, reqUserRole, scopedBranchIds) {
+    let targetUserIds = null;
+
+    if (branchId && branchId !== 'all') {
+      const [empRes, mgrRes] = await Promise.all([
+        supabase.from('branch_employee_assignments').select('employee_id').eq('branch_id', branchId),
+        supabase.from('branch_managers').select('user_id').eq('branch_id', branchId),
+      ]);
+      const empIds = (empRes.data || []).map((a) => a.employee_id).filter(Boolean);
+      const mgrIds = (mgrRes.data || []).map((a) => a.user_id).filter(Boolean);
+      targetUserIds = Array.from(new Set([...empIds, ...mgrIds]));
+    }
+
+    if (reqUserRole === 'branch_manager') {
+      const scopedIds = scopedBranchIds || [];
+      if (scopedIds.length === 0) {
+        return [];
+      }
+      const [empRes, mgrRes] = await Promise.all([
+        supabase.from('branch_employee_assignments').select('employee_id').in('branch_id', scopedIds),
+        supabase.from('branch_managers').select('user_id').in('branch_id', scopedIds),
+      ]);
+      const scopedEmpIds = (empRes.data || []).map((a) => a.employee_id).filter(Boolean);
+      const scopedMgrIds = (mgrRes.data || []).map((a) => a.user_id).filter(Boolean);
+      const scopedSet = new Set([...scopedEmpIds, ...scopedMgrIds]);
+
+      if (targetUserIds !== null) {
+        targetUserIds = targetUserIds.filter((id) => scopedSet.has(id));
+      } else {
+        targetUserIds = Array.from(scopedSet);
+      }
+    }
+
+    return targetUserIds;
+  }
+
+  /**
    * GET /api/hrm/employees/search
    * Lightweight search endpoint for autocompletes, selectors, and quick pickers.
    * Query: ?q=&branch_id=&role=&is_active=true&limit=20
@@ -278,6 +317,20 @@ export class EmployeesController {
       const branch_id = Array.isArray(rawBranchId) ? rawBranchId[0] : (rawBranchId && rawBranchId !== 'all' ? rawBranchId : null);
       const term = (q || queryParam || search || '').trim();
       const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+
+      const branchUserIds = await EmployeesController.getBranchFilteredUserIds(
+        branch_id,
+        req.user.role,
+        req.scopedBranchIds
+      );
+
+      if (branchUserIds !== null && branchUserIds.length === 0) {
+        return res.status(200).json({
+          success: true,
+          count: 0,
+          employees: [],
+        });
+      }
 
       let dbQuery = supabase
         .from('users')
@@ -314,6 +367,10 @@ export class EmployeesController {
         `)
         .neq('role', 'owner');
 
+      if (branchUserIds !== null) {
+        dbQuery = dbQuery.in('id', branchUserIds);
+      }
+
       if (is_active !== 'all') {
         dbQuery = dbQuery.eq('is_active', is_active === 'true' || is_active === true);
       }
@@ -337,21 +394,9 @@ export class EmployeesController {
         }
       }
 
-      // Handle Branch Manager Scoping
-      if (req.user.role === 'branch_manager') {
-        const scopedIds = req.scopedBranchIds || [];
-        if (scopedIds.length === 0) {
-          return res.status(200).json({
-            success: true,
-            count: 0,
-            employees: [],
-          });
-        }
-      }
-
       const { data: users, error } = await dbQuery
         .order('name', { ascending: true })
-        .limit(limitNum * 2);
+        .limit(limitNum);
 
       if (error) {
         return res.status(500).json({
@@ -360,7 +405,7 @@ export class EmployeesController {
         });
       }
 
-      let formatted = (users || []).map((u) => {
+      const formatted = (users || []).map((u) => {
         const profile = Array.isArray(u.employee_profiles)
           ? u.employee_profiles[0]
           : u.employee_profiles;
@@ -390,23 +435,6 @@ export class EmployeesController {
         return empData;
       });
 
-      // Filter by branch_id if passed
-      if (branch_id) {
-        formatted = formatted.filter((emp) =>
-          emp.branches.some((b) => b.id === branch_id)
-        );
-      }
-
-      // Scoped branch filter for branch managers
-      if (req.user.role === 'branch_manager') {
-        const scopedIds = new Set(req.scopedBranchIds || []);
-        formatted = formatted.filter((emp) =>
-          emp.branches.some((b) => scopedIds.has(b.id))
-        );
-      }
-
-      formatted = formatted.slice(0, limitNum);
-
       return res.status(200).json({
         success: true,
         count: formatted.length,
@@ -432,6 +460,22 @@ export class EmployeesController {
       const pageNum = Math.max(1, parseInt(page, 10));
       const limitNum = Math.min(1000, Math.max(1, parseInt(limit, 10)));
       const offset = (pageNum - 1) * limitNum;
+
+      const branchUserIds = await EmployeesController.getBranchFilteredUserIds(
+        branch_id,
+        req.user.role,
+        req.scopedBranchIds
+      );
+
+      if (branchUserIds !== null && branchUserIds.length === 0) {
+        return res.status(200).json({
+          success: true,
+          total: 0,
+          page: pageNum,
+          limit: limitNum,
+          employees: [],
+        });
+      }
 
       let query = supabase
         .from('users')
@@ -463,7 +507,11 @@ export class EmployeesController {
         `,
           { count: 'exact' }
         )
-        .neq('role', 'owner'); // Usually exclude owner from standard employee list
+        .neq('role', 'owner'); // Exclude owner from standard employee list
+
+      if (branchUserIds !== null) {
+        query = query.in('id', branchUserIds);
+      }
 
       if (is_active !== undefined) {
         query = query.eq('is_active', is_active === 'true' || is_active === true);
@@ -488,20 +536,6 @@ export class EmployeesController {
         }
       }
 
-      // Handle Branch Manager Scoping
-      if (req.user.role === 'branch_manager') {
-        const scopedIds = req.scopedBranchIds || [];
-        if (scopedIds.length === 0) {
-          return res.status(200).json({
-            success: true,
-            total: 0,
-            page: pageNum,
-            limit: limitNum,
-            employees: [],
-          });
-        }
-      }
-
       const { data: users, count, error } = await query
         .order('created_at', { ascending: false })
         .range(offset, offset + limitNum - 1);
@@ -513,8 +547,8 @@ export class EmployeesController {
         });
       }
 
-      // Format response & apply post-filter for branch if necessary
-      let formatted = users.map((u) => {
+      // Format response
+      const formatted = (users || []).map((u) => {
         const profile = Array.isArray(u.employee_profiles)
           ? u.employee_profiles[0]
           : u.employee_profiles;
@@ -547,24 +581,9 @@ export class EmployeesController {
         return empData;
       });
 
-      // Branch filter
-      if (branch_id) {
-        formatted = formatted.filter((emp) =>
-          emp.branches.some((b) => b.id === branch_id)
-        );
-      }
-
-      // Scoped branch filter for branch managers
-      if (req.user.role === 'branch_manager') {
-        const scopedIds = new Set(req.scopedBranchIds || []);
-        formatted = formatted.filter((emp) =>
-          emp.branches.some((b) => scopedIds.has(b.id))
-        );
-      }
-
       return res.status(200).json({
         success: true,
-        total: count || formatted.length,
+        total: count !== null && count !== undefined ? count : formatted.length,
         page: pageNum,
         limit: limitNum,
         employees: formatted,
