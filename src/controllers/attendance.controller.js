@@ -1271,6 +1271,96 @@ export class AttendanceController {
       });
     }
   }
+
+  /**
+   * DELETE /api/hrm/attendance/:id
+   * Accessible by: owner, branch_manager
+   * Deletes an accidental or erroneous clock-in / clock-out attendance entry.
+   */
+  static async deleteAttendance(req, res) {
+    try {
+      const { id } = req.params;
+
+      // 1. Fetch attendance record to verify existence and scope
+      const { data: attendance, error: fetchErr } = await supabase
+        .from('attendance')
+        .select('id, employee_id, branch_id, date, clock_in_time, clock_out_time, users(name)')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (fetchErr || !attendance) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Attendance record not found',
+          },
+        });
+      }
+
+      // 2. Branch Manager scoping check
+      if (req.user.role === 'branch_manager') {
+        const scopedIds = req.scopedBranchIds || [];
+        if (!scopedIds.includes(attendance.branch_id)) {
+          return res.status(403).json({
+            success: false,
+            error: {
+              code: 'FORBIDDEN',
+              message: 'You do not have permission to delete attendance for this branch',
+            },
+          });
+        }
+      }
+
+      // 3. Delete attendance record
+      const { error: deleteErr } = await supabase
+        .from('attendance')
+        .delete()
+        .eq('id', id);
+
+      if (deleteErr) {
+        throw new Error(deleteErr.message);
+      }
+
+      // 4. Update employee live locations if needed (reset is_clocked_in if no other punch today)
+      try {
+        const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+        if (attendance.date === todayStr) {
+          const { data: remainingToday } = await supabase
+            .from('attendance')
+            .select('id')
+            .eq('employee_id', attendance.employee_id)
+            .eq('date', todayStr)
+            .is('clock_out_time', null);
+
+          if (!remainingToday || remainingToday.length === 0) {
+            await supabase
+              .from('employee_live_locations')
+              .update({ is_clocked_in: false, last_updated_at: new Date().toISOString() })
+              .eq('employee_id', attendance.employee_id);
+          }
+        }
+      } catch (err) {
+        console.warn('Non-fatal error updating live location state on attendance delete:', err.message);
+      }
+
+      const empName = attendance.users?.name || 'employee';
+      return res.status(200).json({
+        success: true,
+        message: `Attendance record for ${empName} (${attendance.date}) deleted successfully`,
+      });
+    } catch (err) {
+      console.error('Delete attendance error:', err);
+      return res.status(500).json({
+        success: false,
+        error: {
+          code: 'SERVER_ERROR',
+          message: err.message || 'Failed to delete attendance record',
+        },
+      });
+    }
+  }
 }
 
 export default AttendanceController;
+

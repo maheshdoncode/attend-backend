@@ -27,5 +27,6 @@ router.get('/daily-roster', requireRole('owner', 'branch_manager'), AttendanceCo
 router.get('/daily-status', requireRole('owner', 'branch_manager'), AttendanceController.getDailyStatus);
 router.put('/:id/resolve', requireRole('owner', 'branch_manager'), AttendanceController.resolve);
 router.post('/manual', requireRole('owner', 'branch_manager'), AttendanceController.manualPunch);
+router.delete('/:id', requireRole('owner', 'branch_manager'), AttendanceController.deleteAttendance);
 
 export default router;
