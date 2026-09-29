@@ -3,7 +3,15 @@ import path from 'path';
 import { exec } from 'child_process';
 import { google } from 'googleapis';
 import pg from 'pg';
+import dns from 'dns';
 const { Client } = pg;
+
+// Enforce IPv4 DNS resolution first to prevent ENETUNREACH on platforms without IPv6 (Render/Heroku/Docker)
+try {
+  if (dns.setDefaultResultOrder) {
+    dns.setDefaultResultOrder('ipv4first');
+  }
+} catch (e) {}
 
 export const MAX_BACKUP_RETENTION = 7;
 
@@ -161,12 +169,45 @@ function sanitizeDbUrl(rawUrl) {
  */
 export async function executeNodePgDump(rawDbUrl, outputPath) {
   const dbUrl = sanitizeDbUrl(rawDbUrl);
-  const client = new Client({
-    connectionString: dbUrl,
-    ssl: { rejectUnauthorized: false }
-  });
+  
+  let client;
+  let targetHost = 'unknown';
 
-  console.log(`[DATABASE BACKUP] Connecting to PostgreSQL host: ${client.connectionParameters.host}:${client.connectionParameters.port} (database: ${client.connectionParameters.database})...`);
+  try {
+    const parsed = new URL(dbUrl);
+    targetHost = parsed.hostname;
+
+    // Explicitly resolve to IPv4 address to avoid ENETUNREACH on platforms without IPv6 (e.g. Render, Heroku)
+    let ipv4Host = targetHost;
+    try {
+      const lookupRes = await dns.promises.lookup(targetHost, { family: 4 });
+      if (lookupRes && lookupRes.address) {
+        ipv4Host = lookupRes.address;
+      }
+    } catch (lookupErr) {
+      console.warn(`[DATABASE BACKUP] DNS IPv4 lookup fallback for ${targetHost}:`, lookupErr.message);
+    }
+
+    client = new Client({
+      host: ipv4Host,
+      port: parsed.port ? parseInt(parsed.port, 10) : 5432,
+      database: parsed.pathname ? parsed.pathname.replace(/^\//, '') : 'postgres',
+      user: decodeURIComponent(parsed.username || ''),
+      password: decodeURIComponent(parsed.password || ''),
+      ssl: {
+        rejectUnauthorized: false,
+        servername: targetHost, // Preserve SNI for certificate validation
+      },
+    });
+  } catch (parseErr) {
+    // Fallback if URL parsing fails
+    client = new Client({
+      connectionString: dbUrl,
+      ssl: { rejectUnauthorized: false },
+    });
+  }
+
+  console.log(`[DATABASE BACKUP] Connecting to PostgreSQL host: ${targetHost} (${client.connectionParameters.host}:${client.connectionParameters.port})...`);
   await client.connect();
 
   try {

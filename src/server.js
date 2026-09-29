@@ -3,9 +3,17 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import dns from 'dns';
 import hrmRoutes from './routes/index.js';
 import backupRoutes from './backup/backupRoutes.js';
 import { initBackupCron } from './backup/backupCron.js';
+
+// Enforce IPv4 DNS resolution first to prevent ENETUNREACH on cloud environments (e.g. Render, Heroku)
+try {
+  if (dns.setDefaultResultOrder) {
+    dns.setDefaultResultOrder('ipv4first');
+  }
+} catch (e) {}
 
 dotenv.config();
 
