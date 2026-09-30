@@ -4,6 +4,11 @@ import {
   generatePayrollPDF,
   generatePayrollExcel,
 } from '../utils/export.js';
+import {
+  getTodayIST,
+  getCurrentMinutesIST,
+  parseTimeToMinutes,
+} from '../utils/schedule.js';
 
 export class ReportsController {
   /**
@@ -259,10 +264,16 @@ export class ReportsController {
                 holiday_name: 'Sunday Off',
                 hours_worked: 0,
               };
-            } else if (!dayRecord) {
+            } else {
+              const todayStr = getTodayIST();
+              const isPast =
+                dateStr < todayStr ||
+                (dateStr === todayStr &&
+                  getCurrentMinutesIST() >= parseTimeToMinutes(shift?.end_time || '18:00:00'));
+
               dayRecord = {
                 date: dateStr,
-                status: 'not_marked',
+                status: isPast ? 'absent' : 'not_marked',
                 hours_worked: 0,
               };
             }
@@ -693,8 +704,14 @@ export class ReportsController {
                 record = { date: dateStr, status: 'holiday', is_holiday: true, holiday_name: holidayMatch.name };
               } else if (isSunday && !isSpecialWorkingSunday) {
                 record = { date: dateStr, status: 'holiday', is_holiday: true, holiday_name: 'Sunday Off' };
-              } else if (!record) {
-                record = { date: dateStr, status: 'not_marked' };
+              } else {
+                const todayStr = getTodayIST();
+                const isPast =
+                  dateStr < todayStr ||
+                  (dateStr === todayStr &&
+                    getCurrentMinutesIST() >= parseTimeToMinutes(shift?.end_time || '18:00:00'));
+
+                record = { date: dateStr, status: isPast ? 'absent' : 'not_marked', hours_worked: 0 };
               }
             } else if (holidayMatch) {
               record = { ...record, holiday_name: holidayMatch.name };
