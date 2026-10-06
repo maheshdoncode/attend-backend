@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { google } from 'googleapis';
 import pg from 'pg';
 import dns from 'dns';
@@ -21,7 +22,6 @@ export const MAX_BACKUP_RETENTION = 7;
 export const EXCLUDED_DATA_TABLES = [
   'employee_location_history',
   'employee_live_locations',
-  'employee_route_history',
 ];
 
 /**
@@ -31,6 +31,52 @@ export function ensureDirectoryExists(dirPath) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
   }
+}
+
+/**
+ * Initializes and returns an authenticated Cloudflare R2 (S3-compatible) client
+ */
+export function getR2Client() {
+  const accountId = process.env.R2_ACCOUNT_ID;
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    return null;
+  }
+
+  return new S3Client({
+    region: 'auto',
+    endpoint: `https://${accountId.trim()}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId: accessKeyId.trim(),
+      secretAccessKey: secretAccessKey.trim(),
+    },
+  });
+}
+
+/**
+ * Uploads a local file stream to Cloudflare R2 bucket
+ */
+export async function uploadFileToR2(r2Client, filePath, filename, bucketName) {
+  const fileStream = fs.createReadStream(filePath);
+  const stats = fs.statSync(filePath);
+
+  const command = new PutObjectCommand({
+    Bucket: bucketName.trim(),
+    Key: `backups/${filename}`,
+    Body: fileStream,
+    ContentType: 'application/sql',
+    ContentLength: stats.size,
+  });
+
+  await r2Client.send(command);
+
+  return {
+    bucket: bucketName,
+    key: `backups/${filename}`,
+    size: stats.size,
+  };
 }
 
 /**
@@ -184,7 +230,7 @@ export async function executeNodePgDump(rawDbUrl, outputPath) {
       'branch_managers',
       'attendance',
       'employee_live_locations',
-      'employee_route_history',
+      'employee_location_history',
       'leaves',
       'holidays',
       'payroll',
@@ -424,8 +470,9 @@ export async function runBackup() {
 
   console.log(`[DATABASE BACKUP] Starting backup process: ${filename}`);
 
+  let r2Uploaded = false;
+  let r2Key = null;
   let driveFileId = null;
-  let prunedCount = 0;
 
   try {
     // 1. Run database dump (auto-detects pg_dump CLI or pure Node.js dumper)
@@ -439,23 +486,39 @@ export async function runBackup() {
 
     console.log(`[DATABASE BACKUP] Backup file created (${stats.size} bytes): ${localFilePath}`);
 
-    // 2. Initialize Google Drive client
-    const drive = getGoogleDriveClient();
+    // 2. Primary Upload: Cloudflare R2 (Permanent S3-compatible cloud storage)
+    const r2Client = getR2Client();
+    const r2Bucket = process.env.R2_BUCKET_NAME;
 
-    // Resolve folder
-    const folderId = await resolveBackupFolder(drive, rawFolderId);
-
-    // 3. Upload to Google Drive
-    const driveFile = await uploadFileToDrive(drive, localFilePath, filename, folderId);
-    driveFileId = driveFile.id;
-    console.log(`[DATABASE BACKUP] Uploaded to Google Drive successfully! File ID: ${driveFileId}`);
-
-    // 4. Prune old backups (Keep last 7)
-    if (folderId) {
-      prunedCount = await pruneOldDriveBackups(drive, folderId, MAX_BACKUP_RETENTION);
+    if (r2Client && r2Bucket) {
+      try {
+        const r2Res = await uploadFileToR2(r2Client, localFilePath, filename, r2Bucket);
+        r2Uploaded = true;
+        r2Key = r2Res.key;
+        console.log(`[DATABASE BACKUP] Uploaded to Cloudflare R2 successfully! Key: ${r2Key} in bucket: ${r2Bucket}`);
+      } catch (r2Err) {
+        console.error(`[DATABASE BACKUP] Cloudflare R2 upload error: ${r2Err.message}`, r2Err);
+      }
     }
 
-    // 5. Clean up local temporary file after successful Drive upload
+    // 3. Secondary Upload: Google Drive (if configured)
+    try {
+      if (process.env.GDRIVE_CLIENT_ID && process.env.GDRIVE_REFRESH_TOKEN) {
+        const drive = getGoogleDriveClient();
+        const folderId = await resolveBackupFolder(drive, rawFolderId);
+        const driveFile = await uploadFileToDrive(drive, localFilePath, filename, folderId);
+        driveFileId = driveFile.id;
+        console.log(`[DATABASE BACKUP] Uploaded to Google Drive successfully! File ID: ${driveFileId}`);
+      }
+    } catch (gdriveErr) {
+      console.warn(`[DATABASE BACKUP] Google Drive upload skipped/failed: ${gdriveErr.message}`);
+    }
+
+    if (!r2Uploaded && !driveFileId) {
+      throw new Error('Cloud upload failed: neither Cloudflare R2 nor Google Drive succeeded.');
+    }
+
+    // 4. Clean up local temporary file after successful cloud upload
     try {
       if (fs.existsSync(localFilePath)) {
         fs.unlinkSync(localFilePath);
@@ -468,9 +531,11 @@ export async function runBackup() {
     return {
       success: true,
       filename,
+      storage: r2Uploaded ? 'Cloudflare R2' : 'Google Drive',
+      r2Key,
       driveFileId,
       timestamp: new Date().toISOString(),
-      prunedCount,
+      prunedCount: 0,
     };
   } catch (err) {
     console.error(`[DATABASE BACKUP FAILED]: ${err.message}`, err);
