@@ -16,6 +16,15 @@ try {
 export const MAX_BACKUP_RETENTION = 7;
 
 /**
+ * High-volume location tracking tables excluded from data row dump to prevent huge SQL backup files
+ */
+export const EXCLUDED_DATA_TABLES = [
+  'employee_location_history',
+  'employee_live_locations',
+  'employee_route_history',
+];
+
+/**
  * Ensures a directory exists synchronously
  */
 export function ensureDirectoryExists(dirPath) {
@@ -222,6 +231,12 @@ export async function executeNodePgDump(rawDbUrl, outputPath) {
 
       writeStream.write(`CREATE TABLE IF NOT EXISTS public."${tableName}" (\n${colDefs.join(',\n')}\n);\n\n`);
 
+      // Skip row data for excluded high-volume location tracking tables to optimize backup size
+      if (EXCLUDED_DATA_TABLES.includes(tableName)) {
+        writeStream.write(`-- NOTE: Row data for public."${tableName}" excluded from backup to optimize size\n\n`);
+        continue;
+      }
+
       // Fetch all rows
       const rowRes = await client.query(`SELECT * FROM public."${tableName}"`);
       const rows = rowRes.rows;
@@ -268,8 +283,9 @@ export async function executeNodePgDump(rawDbUrl, outputPath) {
  */
 export function executeDump(dbUrl, outputPath) {
   return new Promise((resolve, reject) => {
-    // 1. Try native pg_dump if present
-    const command = `pg_dump "${dbUrl}" --no-owner --no-acl -F p -f "${outputPath}"`;
+    // 1. Try native pg_dump if present (excluding data rows for high-volume location tables)
+    const excludeFlags = EXCLUDED_DATA_TABLES.map((t) => `--exclude-table-data='*.${t}'`).join(' ');
+    const command = `pg_dump "${dbUrl}" --no-owner --no-acl ${excludeFlags} -F p -f "${outputPath}"`;
 
     exec(command, { maxBuffer: 1024 * 1024 * 100 }, async (error, stdout, stderr) => {
       if (!error && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
