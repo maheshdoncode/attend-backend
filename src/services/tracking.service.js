@@ -81,8 +81,6 @@ export class TrackingService {
           throw { status: 401, code: 'USER_NOT_FOUND', message: 'User account not found or has been deleted.' };
         }
         console.error(`❌ [LIVE LOCATION DB ERROR] Employee ${employeeId}:`, liveErr);
-      } else {
-        console.log(`📍 [LIVE LOCATION DB UPDATED] Employee ${employeeId} at (${liveUpdate.latitude}, ${liveUpdate.longitude}) | Speed: ${liveUpdate.speed} km/h`);
       }
     }
 
@@ -147,8 +145,6 @@ export class TrackingService {
 
         if (updateErr) {
           console.error(`❌ [HISTORY DB UPDATE ERROR] Employee ${employeeId}:`, updateErr);
-        } else {
-          console.log(`🗺️ [HISTORY DB UPDATED] Employee ${employeeId} | Total today points: ${currentPoints.length} | Total distance: ${historyPayload.total_distance_km} km`);
         }
       } else {
         const { error: insertErr } = await supabase
@@ -168,11 +164,7 @@ export class TrackingService {
               throw { status: 401, code: 'USER_NOT_FOUND', message: 'User account not found or has been deleted.' };
             }
             console.error(`❌ [HISTORY DB UPSERT ERROR] Employee ${employeeId}:`, upsertErr);
-          } else {
-            console.log(`🗺️ [HISTORY DB UPSERTED] Employee ${employeeId} | Points: ${currentPoints.length} | Distance: ${historyPayload.total_distance_km} km`);
           }
-        } else {
-          console.log(`🗺️ [HISTORY DB CREATED] Employee ${employeeId} | Points: ${currentPoints.length} | Distance: ${historyPayload.total_distance_km} km`);
         }
       }
     }
