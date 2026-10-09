@@ -338,67 +338,155 @@ export class AttendanceController {
     try {
       const employeeId = req.user.id;
       const { month, year } = req.query;
+      const todayStr = getTodayIST();
 
-      let query = supabase
-        .from('attendance')
-        .select(`
-          id,
-          date,
-          clock_in_time,
-          clock_out_time,
-          lunch_start_time,
-          lunch_end_time,
-          lunch_duration_minutes,
-          status,
-          is_flagged,
-          flag_reason,
-          schedule_id,
-          branches (name),
-          work_schedules (id, name, start_time, end_time, has_break, break_start_time, break_end_time)
-        `)
-        .eq('employee_id', employeeId);
-
+      let startDate, endDate;
       if (month && year) {
-        const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-        const lastDay = new Date(year, month, 0).getDate();
-        const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-        query = query.gte('date', startDate).lte('date', endDate);
+        const monthNum = parseInt(month, 10);
+        const yearNum = parseInt(year, 10);
+        startDate = `${yearNum}-${String(monthNum).padStart(2, '0')}-01`;
+        const lastDay = new Date(yearNum, monthNum, 0).getDate();
+        endDate = `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
       } else if (year) {
-        query = query.gte('date', `${year}-01-01`).lte('date', `${year}-12-31`);
+        const yearNum = parseInt(year, 10);
+        startDate = `${yearNum}-01-01`;
+        endDate = `${yearNum}-12-31`;
+      } else {
+        const [curYear, curMonth] = todayStr.split('-');
+        const curYearNum = parseInt(curYear, 10);
+        const curMonthNum = parseInt(curMonth, 10);
+        startDate = `${curYearNum}-${String(curMonthNum).padStart(2, '0')}-01`;
+        const lastDay = new Date(curYearNum, curMonthNum, 0).getDate();
+        endDate = `${curYearNum}-${String(curMonthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
       }
 
-      const { data, error } = await query.order('date', { ascending: false });
+      // Fetch attendance, employee profile, shifts, holidays, and overrides in parallel
+      const [
+        attendanceRes,
+        userProfileRes,
+        shiftAssignmentsRes,
+        scheduleOverridesRes,
+        defaultScheduleRes,
+        holidaysRes,
+        overridesRes,
+      ] = await Promise.all([
+        supabase
+          .from('attendance')
+          .select(`
+            id,
+            date,
+            clock_in_time,
+            clock_out_time,
+            lunch_start_time,
+            lunch_end_time,
+            lunch_duration_minutes,
+            status,
+            is_flagged,
+            flag_reason,
+            schedule_id,
+            branches (name),
+            work_schedules (id, name, start_time, end_time, has_break, break_start_time, break_end_time)
+          `)
+          .eq('employee_id', employeeId)
+          .gte('date', startDate)
+          .lte('date', endDate)
+          .order('date', { ascending: false }),
 
-      if (error) {
+        supabase
+          .from('users')
+          .select(`
+            id,
+            employee_profiles (joined_date, department),
+            branch_employee_assignments (branch_id, branches (id, name)),
+            branch_managers (branch_id, branches (id, name))
+          `)
+          .eq('id', employeeId)
+          .single(),
+
+        supabase
+          .from('employee_shift_assignments')
+          .select('schedule_id, work_schedules (*)')
+          .eq('employee_id', employeeId),
+
+        supabase
+          .from('employee_schedule_overrides')
+          .select('schedule_id, work_schedules (*)')
+          .eq('employee_id', employeeId)
+          .maybeSingle(),
+
+        supabase
+          .from('work_schedules')
+          .select('*')
+          .eq('is_default', true)
+          .maybeSingle(),
+
+        supabase
+          .from('holidays')
+          .select('*')
+          .gte('date', startDate)
+          .lte('date', endDate),
+
+        supabase
+          .from('working_days_overrides')
+          .select('*')
+          .gte('date', startDate)
+          .lte('date', endDate),
+      ]);
+
+      if (attendanceRes.error) {
         return res.status(500).json({
           success: false,
-          error: { code: 'DB_ERROR', message: error.message },
+          error: { code: 'DB_ERROR', message: attendanceRes.error.message },
         });
       }
 
-      let totalPresent = 0;
-      let totalLate = 0;
-      let totalHalfDay = 0;
-      let totalAbsent = 0;
+      const userData = userProfileRes.data;
+      const profile = Array.isArray(userData?.employee_profiles)
+        ? userData.employee_profiles[0]
+        : userData?.employee_profiles;
+      const joinedDate = profile?.joined_date || null;
 
-      const formatted = (data || []).map((r) => {
-        const s = (r.status || '').toLowerCase();
-        if (s === 'present') {
-          totalPresent++;
-        } else if (s === 'late') {
-          totalLate++;
-          totalPresent++; // Arrived late but present at work
-        } else if (s === 'half_day') {
-          totalHalfDay++;
-          totalPresent++; // Present for half shift
-        } else if (s === 'absent') {
-          totalAbsent++;
-        }
+      const branchAssignments = [
+        ...(userData?.branch_employee_assignments || []),
+        ...(userData?.branch_managers || []),
+      ];
+      const branchIds = branchAssignments.map((b) => b.branch_id).filter(Boolean);
+      const primaryBranchName = branchAssignments[0]?.branches?.name || null;
 
-        return {
+      const defaultSchedule = defaultScheduleRes.data || {
+        id: null,
+        name: 'Day Shift',
+        start_time: '09:00:00',
+        end_time: '18:00:00',
+        has_break: false,
+        break_start_time: null,
+        break_end_time: null,
+      };
+
+      const assignedShifts = (shiftAssignmentsRes.data || [])
+        .map((sa) => sa.work_schedules)
+        .filter(Boolean);
+
+      const overrideShift = scheduleOverridesRes.data?.work_schedules || null;
+
+      const effectiveShifts =
+        assignedShifts.length > 0
+          ? assignedShifts
+          : [overrideShift || defaultSchedule];
+
+      const holidaysList = holidaysRes.data || [];
+      const workingDaysOverrides = overridesRes.data || [];
+      const existingAttendance = attendanceRes.data || [];
+
+      const allRecords = [];
+      const processedDateShiftKeys = new Set();
+
+      // 1. Add all actual attendance records that already exist
+      existingAttendance.forEach((r) => {
+        allRecords.push({
           id: r.id,
           date: r.date,
-          branch_name: r.branches?.name || null,
+          branch_name: r.branches?.name || primaryBranchName || null,
           clock_in_time: r.clock_in_time,
           clock_out_time: r.clock_out_time,
           lunch_start_time: r.lunch_start_time || null,
@@ -406,14 +494,127 @@ export class AttendanceController {
           lunch_duration_minutes: r.lunch_duration_minutes || null,
           is_on_lunch: Boolean(r.lunch_start_time && !r.lunch_end_time),
           status: r.status,
-          is_flagged: r.is_flagged,
-          flag_reason: r.flag_reason,
+          is_flagged: Boolean(r.is_flagged),
+          flag_reason: r.flag_reason || null,
           schedule_id: r.schedule_id || null,
-          schedule_name: r.work_schedules?.name || null,
+          schedule_name:
+            r.work_schedules?.name ||
+            effectiveShifts.find((s) => s.id === r.schedule_id)?.name ||
+            'Day Shift',
           has_break: r.work_schedules?.has_break ?? false,
           break_start_time: r.work_schedules?.break_start_time || null,
           break_end_time: r.work_schedules?.break_end_time || null,
-        };
+        });
+
+        if (r.schedule_id) {
+          processedDateShiftKeys.add(`${r.date}_${r.schedule_id}`);
+        }
+        if (effectiveShifts.length <= 1) {
+          processedDateShiftKeys.add(r.date);
+        }
+      });
+
+      // 2. Build absent entries for past working days without attendance punches
+      const startD = new Date(`${startDate}T00:00:00Z`);
+      const endD = new Date(`${endDate}T00:00:00Z`);
+      const todayD = new Date(`${todayStr}T00:00:00Z`);
+      const limitD = endD < todayD ? endD : todayD;
+
+      for (let dt = new Date(startD); dt <= limitD; dt.setUTCDate(dt.getUTCDate() + 1)) {
+        const dateStr = dt.toISOString().split('T')[0];
+        const dayOfWeek = dt.getUTCDay(); // 0 = Sunday
+
+        // Skip dates prior to employee's joined_date
+        if (joinedDate && dateStr < joinedDate) {
+          continue;
+        }
+
+        // Check if Holiday for employee's branch or global
+        const isHolidayMatch = holidaysList.some((h) => {
+          if (h.date !== dateStr) return false;
+          if (!h.branch_id) return true;
+          return branchIds.includes(h.branch_id);
+        });
+
+        // Check special working Sunday override
+        const isSunday = dayOfWeek === 0;
+        const isSpecialWorkingSunday =
+          isSunday &&
+          workingDaysOverrides.some((o) => {
+            if (o.date !== dateStr) return false;
+            if (o.employee_id && o.employee_id === employeeId) return true;
+            if (!o.employee_id && (!o.branch_id || branchIds.includes(o.branch_id))) return true;
+            return false;
+          });
+
+        // If it's a regular Sunday (not override) or a defined holiday, skip
+        if (isHolidayMatch || (isSunday && !isSpecialWorkingSunday)) {
+          continue;
+        }
+
+        // Check for each assigned shift
+        effectiveShifts.forEach((shift) => {
+          const shiftKey = `${dateStr}_${shift.id || 'default'}`;
+
+          if (processedDateShiftKeys.has(shiftKey) || processedDateShiftKeys.has(dateStr)) {
+            return;
+          }
+
+          const currentMinutes = getCurrentMinutesIST();
+          const endMinutes = parseTimeToMinutes(shift.end_time || '18:00:00');
+          const isPast =
+            dateStr < todayStr || (dateStr === todayStr && currentMinutes >= endMinutes);
+
+          if (isPast) {
+            allRecords.push({
+              id: null,
+              date: dateStr,
+              branch_name: primaryBranchName || null,
+              clock_in_time: null,
+              clock_out_time: null,
+              lunch_start_time: null,
+              lunch_end_time: null,
+              lunch_duration_minutes: null,
+              is_on_lunch: false,
+              status: 'absent',
+              is_flagged: false,
+              flag_reason: null,
+              schedule_id: shift.id || null,
+              schedule_name: shift.name || 'Day Shift',
+              has_break: shift.has_break ?? false,
+              break_start_time: shift.break_start_time || null,
+              break_end_time: shift.break_end_time || null,
+            });
+            processedDateShiftKeys.add(shiftKey);
+          }
+        });
+      }
+
+      // Sort all records descending by date
+      allRecords.sort((a, b) => b.date.localeCompare(a.date));
+
+      let totalPresent = 0;
+      let totalLate = 0;
+      let totalHalfDay = 0;
+      let totalAbsent = 0;
+
+      allRecords.forEach((r) => {
+        const s = (r.status || '').toLowerCase();
+        if (s === 'present') {
+          totalPresent++;
+        } else if (s === 'late') {
+          totalLate++;
+          totalPresent++;
+        } else if (s === 'half_day') {
+          totalHalfDay++;
+          totalPresent++;
+        } else if (s === 'half_day_late') {
+          totalHalfDay++;
+          totalLate++;
+          totalPresent++;
+        } else if (s === 'absent') {
+          totalAbsent++;
+        }
       });
 
       return res.status(200).json({
@@ -423,9 +624,9 @@ export class AttendanceController {
           total_late: totalLate,
           total_half_day: totalHalfDay,
           total_absent: totalAbsent,
-          total_records: formatted.length,
+          total_records: allRecords.length,
         },
-        records: formatted,
+        records: allRecords,
       });
     } catch (err) {
       console.error('My attendance error:', err);
