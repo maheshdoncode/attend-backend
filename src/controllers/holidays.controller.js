@@ -7,14 +7,14 @@ export class HolidaysController {
    */
   static async create(req, res) {
     try {
-      const { date, name, branch_id = null } = req.body;
+      const { date, start_date, end_date, name, branch_id = null } = req.body;
 
-      if (!date || !name) {
+      if ((!date && (!start_date || !end_date)) || !name) {
         return res.status(400).json({
           success: false,
           error: {
             code: 'VALIDATION_ERROR',
-            message: 'date (YYYY-MM-DD) and name are required',
+            message: 'date (or start_date and end_date) and name are required',
           },
         });
       }
@@ -43,15 +43,33 @@ export class HolidaysController {
         }
       }
 
-      const { data: holiday, error } = await supabase
+      let datesToInsert = [];
+      if (start_date && end_date) {
+        const start = new Date(`${start_date}T00:00:00Z`);
+        const end = new Date(`${end_date}T00:00:00Z`);
+        if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) {
+          return res.status(400).json({
+            success: false,
+            error: { code: 'VALIDATION_ERROR', message: 'Invalid start_date or end_date' },
+          });
+        }
+        for (let dt = new Date(start); dt <= end; dt.setUTCDate(dt.getUTCDate() + 1)) {
+          datesToInsert.push(dt.toISOString().slice(0, 10));
+        }
+      } else {
+        datesToInsert = [date];
+      }
+
+      const rows = datesToInsert.map((d) => ({
+        date: d,
+        name: name.trim(),
+        branch_id: branch_id || null,
+      }));
+
+      const { data: holidays, error } = await supabase
         .from('holidays')
-        .insert({
-          date,
-          name,
-          branch_id: branch_id || null,
-        })
-        .select()
-        .single();
+        .insert(rows)
+        .select();
 
       if (error) {
         return res.status(500).json({
@@ -62,7 +80,9 @@ export class HolidaysController {
 
       return res.status(201).json({
         success: true,
-        holiday,
+        holiday: holidays?.[0] || null,
+        holidays: holidays || [],
+        count: holidays?.length || 0,
       });
     } catch (err) {
       console.error('Create holiday error:', err);
