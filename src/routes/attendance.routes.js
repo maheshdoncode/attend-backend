@@ -25,6 +25,7 @@ router.get('/', requireRole('owner', 'branch_manager', 'admin'), AttendanceContr
 router.get('/daily-summary', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.getDailySummary);
 router.get('/daily-roster', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.getDailyRoster);
 router.get('/daily-status', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.getDailyStatus);
+router.get('/punch-details', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.getPunchDetails);
 router.put('/:id/resolve', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.resolve);
 router.post('/manual', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.manualPunch);
 router.delete('/:id', requireRole('owner', 'branch_manager', 'admin'), AttendanceController.deleteAttendance);

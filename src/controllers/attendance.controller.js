@@ -330,6 +330,201 @@ export class AttendanceController {
   }
 
   /**
+   * GET /api/hrm/attendance/punch-details
+   * Query: ?employee_id=&date=&schedule_id=
+   * Accessible by: owner, branch_manager, admin
+   */
+  static async getPunchDetails(req, res) {
+    try {
+      const { employee_id, date, schedule_id } = req.query;
+
+      if (!employee_id || !date) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'employee_id and date are required' },
+        });
+      }
+
+      // 1. Parallel fetch for user, attendance, schedule, holiday, and override (1 single round trip!)
+      const [userRes, attRes, schRes, holidayRes, overrideRes] = await Promise.all([
+        supabase
+          .from('users')
+          .select(`
+            id,
+            name,
+            employee_profiles (employee_code, department),
+            branch_employee_assignments (branch_id, branches(name))
+          `)
+          .eq('id', employee_id)
+          .maybeSingle(),
+
+        supabase
+          .from('attendance')
+          .select(`
+            id,
+            employee_id,
+            branch_id,
+            schedule_id,
+            date,
+            clock_in_time,
+            clock_in_lat,
+            clock_in_lng,
+            clock_out_time,
+            clock_out_lat,
+            clock_out_lng,
+            lunch_start_time,
+            lunch_end_time,
+            lunch_duration_minutes,
+            status,
+            is_flagged,
+            flag_reason,
+            admin_notes,
+            created_at,
+            branches (name)
+          `)
+          .eq('employee_id', employee_id)
+          .eq('date', date),
+
+        schedule_id && schedule_id !== 'default'
+          ? supabase
+              .from('work_schedules')
+              .select('id, name, start_time, end_time, has_break, break_start_time, break_end_time')
+              .eq('id', schedule_id)
+              .maybeSingle()
+          : Promise.resolve({ data: null }),
+
+        supabase
+          .from('holidays')
+          .select('id, name, branch_id')
+          .eq('date', date)
+          .maybeSingle(),
+
+        supabase
+          .from('working_days_overrides')
+          .select('id, reason, branch_id, employee_id')
+          .eq('date', date)
+          .maybeSingle(),
+      ]);
+
+      if (userRes.error || !userRes.data) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Employee not found' },
+        });
+      }
+
+      const user = userRes.data;
+      const profile = Array.isArray(user.employee_profiles)
+        ? user.employee_profiles[0]
+        : user.employee_profiles;
+      const assignedBranches = (user.branch_employee_assignments || [])
+        .map((b) => b.branches?.name)
+        .filter(Boolean);
+
+      // Pick matching attendance punch
+      const attRecords = attRes.data || [];
+      let att = null;
+      if (schedule_id && schedule_id !== 'default') {
+        att = attRecords.find((r) => r.schedule_id === schedule_id) || attRecords[0] || null;
+      } else {
+        att = attRecords[0] || null;
+      }
+
+      const schedule = schRes.data || null;
+
+      const parts = date.split('-');
+      const dObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+      const isSunday = dObj.getDay() === 0;
+      const isWorkingSunday = isSunday && Boolean(overrideRes.data);
+
+      let computedStatus = att?.status;
+      if (!computedStatus) {
+        if (holidayRes.data) {
+          computedStatus = 'holiday';
+        } else if (isSunday && !isWorkingSunday) {
+          computedStatus = 'holiday';
+        } else {
+          const todayStr = getTodayIST();
+          const isPast =
+            date < todayStr ||
+            (date === todayStr &&
+              getCurrentMinutesIST() >= parseTimeToMinutes(schedule?.end_time || '18:00:00'));
+          computedStatus = isPast ? 'absent' : 'not_marked';
+        }
+      }
+
+      // Calculate total worked time
+      let hoursWorked = 0;
+      let formattedDuration = null;
+      if (att?.clock_in_time && att?.clock_out_time) {
+        const cin = new Date(att.clock_in_time).getTime();
+        const cout = new Date(att.clock_out_time).getTime();
+        const totalMinutes = Math.max(0, Math.floor((cout - cin) / 60000));
+        const hrs = Math.floor(totalMinutes / 60);
+        const mins = totalMinutes % 60;
+        hoursWorked = Number((totalMinutes / 60).toFixed(2));
+        formattedDuration = `${hrs} hr${hrs === 1 ? '' : 's'} ${mins} min${mins === 1 ? '' : 's'}`;
+      } else if (att?.clock_in_time && !att?.clock_out_time) {
+        const cin = new Date(att.clock_in_time).getTime();
+        const now = Date.now();
+        const totalMinutes = Math.max(0, Math.floor((now - cin) / 60000));
+        const hrs = Math.floor(totalMinutes / 60);
+        const mins = totalMinutes % 60;
+        formattedDuration = `Active (${hrs} hr${hrs === 1 ? '' : 's'} ${mins} min${mins === 1 ? '' : 's'})`;
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          employee: {
+            id: user.id,
+            name: user.name,
+            employee_code: profile?.employee_code || null,
+            department: profile?.department || 'General',
+            assigned_branches: assignedBranches,
+          },
+          date,
+          shift: schedule || {
+            id: null,
+            name: 'Day Shift',
+            start_time: '09:00:00',
+            end_time: '18:00:00',
+          },
+          status: computedStatus,
+          is_holiday: Boolean(holidayRes.data || (isSunday && !isWorkingSunday)),
+          holiday_name: holidayRes.data?.name || (isSunday && !isWorkingSunday ? 'Sunday Off' : null),
+          punch: att
+            ? {
+                id: att.id,
+                clock_in_time: att.clock_in_time,
+                clock_in_lat: att.clock_in_lat,
+                clock_in_lng: att.clock_in_lng,
+                clock_out_time: att.clock_out_time,
+                clock_out_lat: att.clock_out_lat,
+                clock_out_lng: att.clock_out_lng,
+                lunch_start_time: att.lunch_start_time,
+                lunch_end_time: att.lunch_end_time,
+                lunch_duration_minutes: att.lunch_duration_minutes,
+                hours_worked: hoursWorked,
+                formatted_duration: formattedDuration,
+                is_flagged: att.is_flagged,
+                flag_reason: att.flag_reason,
+                admin_notes: att.admin_notes,
+                branch_name: att.branches?.name || null,
+              }
+            : null,
+        },
+      });
+    } catch (err) {
+      console.error('Punch details error:', err);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'SERVER_ERROR', message: err.message },
+      });
+    }
+  }
+
+  /**
    * GET /api/hrm/attendance/my
    * Accessible by: employee
    * Query: ?month=&year=

@@ -69,7 +69,7 @@ export const generateAttendanceExcel = async (data, month, year) => {
   // Status symbols mapping
   const resolveStatusSymbol = (dayRecord) => {
     if (!dayRecord) return '-';
-    const rawStatus = String(dayRecord.status || '').toLowerCase();
+    const rawStatus = String(typeof dayRecord === 'string' ? dayRecord : dayRecord.status || '').toLowerCase();
     const isLate = Boolean(dayRecord.is_late) || rawStatus === 'late' || (dayRecord.flag_reason && String(dayRecord.flag_reason).toLowerCase().includes('late'));
     const isHalfDay = Boolean(dayRecord.is_half_day) || rawStatus === 'half_day';
 
@@ -78,9 +78,9 @@ export const generateAttendanceExcel = async (data, month, year) => {
     }
     if (isHalfDay) return 'H';
     if (isLate) return 'L';
-    if (rawStatus === 'present' || dayRecord.is_present) return 'P';
-    if (rawStatus === 'absent') return 'A';
-    if (rawStatus === 'holiday' || dayRecord.is_holiday || rawStatus === 'off') return 'OFF';
+    if (rawStatus === 'present' || rawStatus === 'p' || dayRecord.is_present) return 'P';
+    if (rawStatus === 'absent' || rawStatus === 'a') return 'A';
+    if (rawStatus === 'holiday' || rawStatus === 'off' || dayRecord.is_holiday) return 'OFF';
 
     // Check if the date is a Sunday
     if (dayRecord.date && (rawStatus === 'not_marked' || rawStatus === '-' || !rawStatus)) {
